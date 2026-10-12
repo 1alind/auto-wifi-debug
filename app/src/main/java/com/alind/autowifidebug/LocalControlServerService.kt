@@ -110,12 +110,7 @@ class LocalControlServerService : Service() {
             val method = parts.getOrNull(0).orEmpty()
             val path = parts.getOrNull(1).orEmpty().substringBefore("?")
             val body = when {
-                path == "/status" -> json(
-                    if (isDebuggingSettingOn()) "SETTING_ON" else "SETTING_OFF",
-                    "debugging" to isDebuggingSettingOn().toString(),
-                    "server" to "true",
-                    "port" to PORT.toString()
-                )
+                path == "/status" -> statusResponse()
                 path == "/enable" && (method == "POST" || method == "GET") -> enableDebugging()
                 path == "/stop" && method == "POST" -> json("STOPPING", "port" to PORT.toString())
                 path == "/" -> json("OK", "port" to PORT.toString(), "endpoints" to "[\"GET /status\",\"POST /enable\",\"POST /stop\"]")
@@ -134,6 +129,37 @@ class LocalControlServerService : Service() {
                 Log.i(TAG, "Received explicit stop request")
                 stopSelf()
             }
+        }
+    }
+
+    /** Returns the Wireless debugging ADB TLS port, not the local HTTP API port. */
+    private fun statusResponse(): String {
+        val enabled = isDebuggingSettingOn()
+        val endpoint = if (enabled) findWirelessDebuggingEndpoint() else null
+        return if (endpoint != null) {
+            val (ip, adbPort) = endpoint
+            json(
+                "SETTING_ON",
+                "debugging" to "true",
+                "server" to "true",
+                "api_port" to PORT.toString(),
+                "ip" to jsonString(ip),
+                "port" to adbPort.toString(),
+                "connect_command" to jsonString("adb connect $ip:$adbPort")
+            )
+        } else {
+            json(
+                if (enabled) "SETTING_ON" else "SETTING_OFF",
+                "debugging" to enabled.toString(),
+                "server" to "true",
+                "api_port" to PORT.toString(),
+                "ip" to "null",
+                "port" to "null",
+                "message" to jsonString(
+                    if (enabled) "Wireless debugging is enabled, but its ADB connection port was not discovered."
+                    else "Wireless debugging is off."
+                )
+            )
         }
     }
 
