@@ -4,6 +4,10 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Handler
+import android.os.Looper
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -99,13 +103,39 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Grant the one-time ADB permission first.", Toast.LENGTH_LONG).show()
             return
         }
+        if (!isConnectedToWifi()) {
+            Toast.makeText(this, "Connect to Wi-Fi first. Android requires an active Wi-Fi network.", Toast.LENGTH_LONG).show()
+            return
+        }
         try {
             val wrote = Settings.Global.putInt(contentResolver, SETTING_ADB_WIFI_ENABLED, 1)
-            refreshStatus()
-            Toast.makeText(this, if (wrote) "Enable request sent" else "Android rejected the setting change", Toast.LENGTH_LONG).show()
+            if (!wrote) {
+                Toast.makeText(this, "Android rejected the setting change.", Toast.LENGTH_LONG).show()
+                return
+            }
+            status.text = "Checking Android…"
+            Toast.makeText(this, "Checking whether Android accepted the change…", Toast.LENGTH_SHORT).show()
+            Handler(Looper.getMainLooper()).postDelayed({
+                refreshStatus()
+                val enabled = try {
+                    Settings.Global.getInt(contentResolver, SETTING_ADB_WIFI_ENABLED, 0) == 1
+                } catch (_: Exception) { false }
+                if (enabled) {
+                    Toast.makeText(this, "Wireless debugging setting is ON.", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "Android turned it back OFF. Open Developer options > Wireless debugging and approve this Wi-Fi network once.", Toast.LENGTH_LONG).show()
+                }
+            }, 1800)
         } catch (e: Exception) {
             Toast.makeText(this, "Could not enable Wireless debugging", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun isConnectedToWifi(): Boolean {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     private fun refreshStatus() {
