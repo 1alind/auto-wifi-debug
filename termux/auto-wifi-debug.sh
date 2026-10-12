@@ -32,7 +32,7 @@ done
 
 if [[ -z "$response" ]]; then
     echo "No server response on port 23456."
-    echo "If Wireless debugging is already ON, the server is designed to be stopped."
+    echo "Open Auto Wi-Fi Debug and check whether Android allowed its foreground service."
     echo "Otherwise open Auto Wi-Fi Debug and check whether Android allowed its foreground service."
     exit 5
 fi
@@ -59,7 +59,7 @@ case "$status" in
             echo "Open Developer options > Wireless debugging and confirm it is actually active."
             echo "Android must advertise _adb-tls-connect._tcp via mDNS for automatic discovery to work."
         fi
-        echo "The local HTTP server will now stop automatically. It should restart when debugging is turned OFF."
+        echo "The local HTTP server stays available. Stop it explicitly with: curl -X POST http://127.0.0.1:23456/stop"
         ;;
     WIFI_OFF)
         echo "Wi-Fi is off. Re-run the command after enabling Wi-Fi."
