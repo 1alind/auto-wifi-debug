@@ -26,7 +26,7 @@ sleep 2
 echo "Sending request to 127.0.0.1:23456..."
 response=""
 for attempt in {1..10}; do
-    response="$(curl --silent --show-error --connect-timeout 1 --max-time 5 -X POST "$API/enable" 2>/dev/null)" && [[ -n "$response" ]] && break
+    response="$(curl --silent --show-error --connect-timeout 1 --max-time 12 -X POST "$API/enable" 2>/dev/null)" && [[ -n "$response" ]] && break
     sleep 1
 done
 
@@ -42,8 +42,24 @@ status="$(printf '%s' "$response" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')"
 
 case "$status" in
     SETTING_ON)
-        echo "Android kept the Wireless debugging setting ON. The server will now stop automatically."
-        echo "When the setting turns OFF, the background service should start the server again."
+        ip="$(printf '%s' "$response" | sed -n 's/.*"ip":"\([^"]*\)".*/\1/p')"
+        port="$(printf '%s' "$response" | sed -n 's/.*"port":\([0-9][0-9]*\).*/\1/p')"
+        if [[ -n "$ip" && "$ip" != "null" && -n "$port" && "$port" != "null" ]]; then
+            echo "Wireless debugging endpoint: $ip:$port"
+            if command -v adb >/dev/null 2>&1; then
+                echo "Connecting with ADB..."
+                adb connect "$ip:$port"
+            else
+                echo "ADB is not installed in Termux. Install Android platform-tools to connect:"
+                echo "pkg install android-tools"
+                echo "Then run: adb connect $ip:$port"
+            fi
+        else
+            echo "Wireless debugging setting is ON, but Android did not provide an ADB connection IP/port."
+            echo "Open Developer options > Wireless debugging and confirm it is actually active."
+            echo "Android must advertise _adb-tls-connect._tcp via mDNS for automatic discovery to work."
+        fi
+        echo "The local HTTP server will now stop automatically. It should restart when debugging is turned OFF."
         ;;
     WIFI_OFF)
         echo "Wi-Fi is off. Re-run the command after enabling Wi-Fi."
