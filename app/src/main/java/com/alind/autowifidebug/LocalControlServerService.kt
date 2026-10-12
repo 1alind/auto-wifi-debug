@@ -113,11 +113,13 @@ class LocalControlServerService : Service() {
                 path == "/status" -> json(
                     if (isDebuggingSettingOn()) "SETTING_ON" else "SETTING_OFF",
                     "debugging" to isDebuggingSettingOn().toString(),
-                    "server" to "true"
+                    "server" to "true",
+                    "port" to PORT.toString()
                 )
                 path == "/enable" && (method == "POST" || method == "GET") -> enableDebugging()
-                path == "/" -> json("OK", "port" to PORT.toString(), "endpoints" to "[\"GET /status\",\"POST /enable\"]")
-                else -> json("NOT_FOUND", "error" to "\"Use /status or /enable\"")
+                path == "/stop" && method == "POST" -> json("STOPPING", "port" to PORT.toString())
+                path == "/" -> json("OK", "port" to PORT.toString(), "endpoints" to "[\"GET /status\",\"POST /enable\",\"POST /stop\"]")
+                else -> json("NOT_FOUND", "error" to "\"Use /status, /enable, or /stop\"")
             }
             val statusCode = if (path == "/status" || path == "/enable" || path == "/stop" || path == "/") 200 else 404
             val bytes = body.toByteArray(StandardCharsets.UTF_8)
