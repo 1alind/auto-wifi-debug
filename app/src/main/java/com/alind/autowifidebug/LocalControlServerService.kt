@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -20,6 +22,10 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Loopback-only HTTP API. The monitoring service stays alive, but the socket is
@@ -143,12 +149,98 @@ class LocalControlServerService : Service() {
             if (!wrote) return json("WRITE_FAILED")
             Thread.sleep(VERIFY_DELAY_MS)
             val enabled = isDebuggingSettingOn()
-            if (enabled) json("SETTING_ON", "debugging" to "true")
-            else json("SETTING_OFF", "debugging" to "false", "message" to "\"Android did not keep the setting enabled\"")
+            if (!enabled) {
+                json("SETTING_OFF", "debugging" to "false", "message" to "\"Android did not keep the setting enabled\"")
+            } else {
+                val endpoint = findWirelessDebuggingEndpoint()
+                if (endpoint != null) {
+                    val (ip, port) = endpoint
+                    json(
+                        "SETTING_ON",
+                        "debugging" to "true",
+                        "ip" to jsonString(ip),
+                        "port" to port.toString(),
+                        "connect_command" to jsonString("adb connect $ip:$port")
+                    )
+                } else {
+                    json(
+                        "SETTING_ON",
+                        "debugging" to "true",
+                        "ip" to "null",
+                        "port" to "null",
+                        "connect_command" to "null",
+                        "message" to jsonString("Wireless debugging is enabled, but Android did not advertise its connection endpoint via mDNS. Check the Wireless debugging screen.")
+                    )
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Could not enable debugging setting", e)
             json("WRITE_FAILED")
         }
+    }
+
+    /**
+     * Finds the actual ADB TLS connect service announced by Android's mDNS.
+     * The pairing service uses a different name and is intentionally ignored.
+     */
+    private fun findWirelessDebuggingEndpoint(): Pair<String, Int>? {
+        val nsd = getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return null
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<Pair<String, Int>?>(null)
+        val resolving = AtomicBoolean(false)
+        val discoveryStopped = AtomicBoolean(false)
+
+        val discoveryListener = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(serviceType: String) = Unit
+
+            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+                if (!serviceInfo.serviceType.contains(ADB_CONNECT_SERVICE_TYPE) ||
+                    !resolving.compareAndSet(false, true)) return
+                try {
+                    nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                            resolving.set(false)
+                        }
+
+                        override fun onServiceResolved(info: NsdServiceInfo) {
+                            val address = info.host?.hostAddress
+                            val port = info.port
+                            if (!address.isNullOrBlank() && port > 0) {
+                                result.set(address to port)
+                                latch.countDown()
+                            } else {
+                                resolving.set(false)
+                            }
+                        }
+                    })
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not resolve ADB mDNS service", e)
+                    resolving.set(false)
+                }
+            }
+
+            override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
+            override fun onDiscoveryStopped(serviceType: String) { discoveryStopped.set(true) }
+            override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                try { nsd.stopServiceDiscovery(this) } catch (_: Exception) {}
+                latch.countDown()
+            }
+            override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                try { nsd.stopServiceDiscovery(this) } catch (_: Exception) {}
+            }
+        }
+
+        try {
+            nsd.discoverServices(ADB_CONNECT_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+            latch.await(NSD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            Log.w(TAG, "ADB mDNS discovery failed", e)
+        } finally {
+            if (!discoveryStopped.get()) {
+                try { nsd.stopServiceDiscovery(discoveryListener) } catch (_: Exception) {}
+            }
+        }
+        return result.get()
     }
 
     private fun isDebuggingSettingOn(): Boolean = try {
@@ -176,6 +268,9 @@ class LocalControlServerService : Service() {
         return if (extras.isEmpty()) "{\"status\":\"$status\"}"
         else "{\"status\":\"$status\",$extras}"
     }
+
+    private fun jsonString(value: String): String =
+        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -218,5 +313,7 @@ class LocalControlServerService : Service() {
         private const val POLL_MS = 1000L
         private const val NOTIFICATION_ID = 23456
         private const val CHANNEL_ID = "auto_wifi_debug_server"
+        private const val ADB_CONNECT_SERVICE_TYPE = "_adb-tls-connect._tcp."
+        private const val NSD_TIMEOUT_SECONDS = 6L
     }
 }
