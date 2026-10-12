@@ -1,6 +1,6 @@
 # Auto Wi-Fi Debug
 
-Android app for Android 11+ with a simple interface and a broadcast API for Termux automation.
+Android app for Android 11+ with a local HTTP API for Termux automation.
 
 ## One-time Android permission
 
@@ -10,50 +10,43 @@ After installing the APK, grant the secure-settings permission from an authorize
 
 This does not require root, but it does require an authorized ADB shell for the one-time grant.
 
-## Termux bridge setup
+## Termux setup
 
-The APK sends request results back into Termux using Termux's documented `RUN_COMMAND` integration. This requires a one-time setup:
+Install Termux:API and the command-line tools:
 
-1. Make sure both Termux and Termux:API are installed from compatible sources, and install the Termux API command package:
-   `pkg install termux-api curl`
-2. In Termux, edit `~/.termux/termux.properties` and set:
-   `allow-external-apps=true`
-   Create the `~/.termux` directory first if needed. Restart Termux after changing this setting.
-3. Open Android Settings → Apps → Auto Wi-Fi Debug → Permissions → Additional permissions, and grant **Run commands in Termux environment** if that permission is shown.
-4. Install the companion script:
-   ```sh
-   mkdir -p ~/.autowifidebug
-   curl -L https://raw.githubusercontent.com/1alind/auto-wifi-debug/main/termux/auto-wifi-debug.sh -o ~/.autowifidebug/auto-wifi-debug.sh
-   ```
+`pkg install termux-api curl`
 
-The RUN_COMMAND permission is powerful because Android allows the app to start commands in Termux's user context. Only grant it to an APK you trust. This app invokes a fixed script path and passes a validated request ID and fixed status values.
+Download the companion client:
 
-## Run the workflow
+```sh
+mkdir -p ~/.autowifidebug
+curl -L https://raw.githubusercontent.com/1alind/auto-wifi-debug/main/termux/auto-wifi-debug.sh -o ~/.autowifidebug/auto-wifi-debug.sh
+chmod +x ~/.autowifidebug/auto-wifi-debug.sh
+```
 
-In Termux, run:
+## Run
 
 ```sh
 bash ~/.autowifidebug/auto-wifi-debug.sh
 ```
 
-The script sends a request to the APK. The APK checks Wi-Fi and replies with a status file written through Termux's RUN_COMMAND service. If Wi-Fi is off, the script runs `termux-wifi-enable true`, waits, and retries the request. If Wi-Fi is on and connected, the APK attempts to set `adb_wifi_enabled=1` and returns the verified setting value.
+The client turns Wi-Fi on first, opens the APK, then sends an HTTP request to `127.0.0.1:23456/enable`.
 
-## Broadcast API
+## Local API and automatic server lifecycle
 
-- Action: `com.alind.autowifidebug.ENABLE`
-- Extra: `request_id` (letters, digits, underscore, or hyphen; 1–64 characters)
-- Response file: `~/.autowifidebug/results/<request_id>`
-- Possible responses: `WIFI_OFF`, `WIFI_NOT_CONNECTED`, `PERMISSION_MISSING`, `WRITE_FAILED`, `VERIFY_FAILED`, `SETTING_ON`, `SETTING_OFF`
+The APK hosts a localhost-only HTTP server on port **23456**. It does not listen on the Wi-Fi/LAN interface.
 
-Example request (the companion script handles response tracking):
+- `GET http://127.0.0.1:23456/status` returns the setting/server status.
+- `POST http://127.0.0.1:23456/enable` attempts to set `adb_wifi_enabled=1`.
+- The listening socket closes when the `adb_wifi_enabled` setting is on.
+- A foreground monitoring service checks the setting every second and reopens the socket when the setting is off.
+- Open Auto Wi-Fi Debug at least once to start the monitoring service. Android may stop services if the app is force-stopped or restricted by battery settings.
 
-```sh
-am broadcast -a com.alind.autowifidebug.ENABLE --es request_id test_123
-```
+No Termux RUN_COMMAND permission, broadcast response file, or `allow-external-apps=true` setting is needed for this HTTP approach.
 
 ## Important limitation
 
-`SETTING_ON` means Android's `adb_wifi_enabled` setting remained on after a short delay. It does **not** prove that Wireless debugging is actually available or that the ADB port is reachable. Android/Samsung firmware can override the setting or require a one-time approval in Developer options. Test on the Galaxy A50 (Android 11) and Galaxy A52 (Android 14).
+The server checks the Android global setting `adb_wifi_enabled`. A value of 1 does **not** guarantee the actual Wireless debugging feature is available or reachable. Android/Samsung firmware can override the setting or require approval in Developer options. Test on the Galaxy A50 (Android 11) and Galaxy A52 (Android 14). The app cannot bypass Android's security prompts.
 
 ## Build
 
