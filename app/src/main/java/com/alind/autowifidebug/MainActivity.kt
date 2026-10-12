@@ -90,12 +90,21 @@ class MainActivity : Activity() {
         root.addView(text("Android may require a system confirmation. Connect to Wi-Fi first. This app cannot bypass Android's security prompts.", 13f, Color.rgb(207, 218, 233), false))
 
         setContentView(scroll)
+        startLocalServerService()
         refreshStatus()
     }
 
     override fun onResume() {
         super.onResume()
         if (::status.isInitialized) refreshStatus()
+    }
+
+    private fun startLocalServerService() {
+        try {
+            startForegroundService(Intent(this, LocalControlServerService::class.java))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Could not start the local API service: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun enableWirelessDebugging() {
