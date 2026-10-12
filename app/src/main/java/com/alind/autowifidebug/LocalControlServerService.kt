@@ -5,12 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.nsd.NsdManager
-import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -28,28 +28,35 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Loopback-only HTTP API. The server remains available regardless of Wi-Fi or
- * Wireless debugging state, until an explicit POST /stop request.
+ * Keeps a loopback-only HTTP API alive across reboots and Wi‑Fi disconnect/reconnect events.
  */
 class LocalControlServerService : Service() {
     @Volatile private var running = false
     @Volatile private var serverSocket: ServerSocket? = null
     private var worker: Thread? = null
 
+    private val connectivityReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == null) return
+            val wifiConnected = isConnectedToWifi()
+            Log.i(TAG, "Connectivity update: action=${intent.action}, wifiConnected=$wifiConnected")
+            if (wifiConnected) {
+                // Recreate the HTTP listener after Wi‑Fi returns so the service is immediately ready.
+                restartServerIfNeeded()
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
+        registerConnectivityReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (worker?.isAlive != true) {
-            running = true
-            worker = Thread({ serverLoop() }, "AutoWifiDebugHttpServer").apply {
-                isDaemon = true
-                start()
-            }
-        }
+        running = true
+        ensureServerThread()
         return START_STICKY
     }
 
@@ -59,7 +66,41 @@ class LocalControlServerService : Service() {
         running = false
         closeServer()
         worker?.interrupt()
+        try {
+            unregisterReceiver(connectivityReceiver)
+        } catch (_: IllegalArgumentException) {
+            // Receiver may not have been registered.
+        }
         super.onDestroy()
+    }
+
+    private fun registerConnectivityReceiver() {
+        val filter = IntentFilter().apply {
+            addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
+            addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
+            addAction(ConnectivityManager.CONNECTIVITY_ACTION)
+        }
+        try {
+            registerReceiver(connectivityReceiver, filter)
+        } catch (_: Exception) {
+            Log.w(TAG, "Could not register connectivity receiver")
+        }
+    }
+
+    private fun ensureServerThread() {
+        if (worker?.isAlive == true) return
+        running = true
+        worker = Thread({ serverLoop() }, "AutoWifiDebugHttpServer").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun restartServerIfNeeded() {
+        if (!running) return
+        if (serverSocket != null && !serverSocket!!.isClosed) return
+        closeServer()
+        ensureServerThread()
     }
 
     private fun serverLoop() {
@@ -76,7 +117,7 @@ class LocalControlServerService : Service() {
                     val client = serverSocket?.accept()
                     if (client != null) handleClient(client)
                 } catch (_: java.net.SocketTimeoutException) {
-                    // Poll the debugging setting regularly.
+                    // Poll until a client arrives.
                 } catch (e: Exception) {
                     if (running) Log.w(TAG, "Server accept failed", e)
                     closeServer()
@@ -87,7 +128,9 @@ class LocalControlServerService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "Server loop error", e)
                 closeServer()
-                try { Thread.sleep(POLL_MS) } catch (_: InterruptedException) {
+                try {
+                    Thread.sleep(POLL_MS)
+                } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     break
                 }
@@ -113,16 +156,22 @@ class LocalControlServerService : Service() {
                 path == "/status" -> statusResponse()
                 path == "/enable" && (method == "POST" || method == "GET") -> enableDebugging()
                 path == "/stop" && method == "POST" -> json("STOPPING", "port" to PORT.toString())
-                path == "/" -> json("OK", "port" to PORT.toString(), "endpoints" to "[\"GET /status\",\"POST /enable\",\"POST /stop\"]")
+                path == "/" -> json(
+                    "OK",
+                    "port" to PORT.toString(),
+                    "endpoints" to "[\"GET /status\",\"POST /enable\",\"POST /stop\"]"
+                )
                 else -> json("NOT_FOUND", "error" to "\"Use /status, /enable, or /stop\"")
             }
             val statusCode = if (path == "/status" || path == "/enable" || path == "/stop" || path == "/") 200 else 404
             val bytes = body.toByteArray(StandardCharsets.UTF_8)
             val output = client.getOutputStream()
-            output.write(("HTTP/1.1 $statusCode ${if (statusCode == 200) "OK" else "Not Found"}\r\n" +
-                "Content-Type: application/json; charset=utf-8\r\n" +
-                "Content-Length: ${bytes.size}\r\n" +
-                "Connection: close\r\n\r\n").toByteArray(StandardCharsets.US_ASCII))
+            output.write((
+                "HTTP/1.1 $statusCode ${if (statusCode == 200) "OK" else "Not Found"}\r\n" +
+                    "Content-Type: application/json; charset=utf-8\r\n" +
+                    "Content-Length: ${bytes.size}\r\n" +
+                    "Connection: close\r\n\r\n"
+            ).toByteArray(StandardCharsets.US_ASCII))
             output.write(bytes)
             output.flush()
             if (path == "/stop" && method == "POST") {
@@ -136,12 +185,14 @@ class LocalControlServerService : Service() {
     private fun statusResponse(): String {
         val enabled = isDebuggingSettingOn()
         val endpoint = if (enabled) findWirelessDebuggingEndpoint() else null
+        val wifiConnected = isConnectedToWifi()
         return if (endpoint != null) {
             val (ip, adbPort) = endpoint
             json(
                 "SETTING_ON",
                 "debugging" to "true",
                 "server" to "true",
+                "wifi_connected" to wifiConnected.toString(),
                 "api_port" to PORT.toString(),
                 "ip" to jsonString(ip),
                 "port" to adbPort.toString(),
@@ -152,6 +203,7 @@ class LocalControlServerService : Service() {
                 if (enabled) "SETTING_ON" else "SETTING_OFF",
                 "debugging" to enabled.toString(),
                 "server" to "true",
+                "wifi_connected" to wifiConnected.toString(),
                 "api_port" to PORT.toString(),
                 "ip" to "null",
                 "port" to "null",
@@ -210,25 +262,25 @@ class LocalControlServerService : Service() {
      * The pairing service uses a different name and is intentionally ignored.
      */
     private fun findWirelessDebuggingEndpoint(): Pair<String, Int>? {
-        val nsd = getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return null
+        val nsd = getSystemService(Context.NSD_SERVICE) as? android.net.nsd.NsdManager ?: return null
         val latch = CountDownLatch(1)
         val result = AtomicReference<Pair<String, Int>?>(null)
         val resolving = AtomicBoolean(false)
         val discoveryStopped = AtomicBoolean(false)
 
-        val discoveryListener = object : NsdManager.DiscoveryListener {
+        val discoveryListener = object : android.net.nsd.NsdManager.DiscoveryListener {
             override fun onDiscoveryStarted(serviceType: String) = Unit
 
-            override fun onServiceFound(serviceInfo: NsdServiceInfo) {
+            override fun onServiceFound(serviceInfo: android.net.nsd.NsdServiceInfo) {
                 if (!serviceInfo.serviceType.contains(ADB_CONNECT_SERVICE_TYPE) ||
                     !resolving.compareAndSet(false, true)) return
                 try {
-                    nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
-                        override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+                    nsd.resolveService(serviceInfo, object : android.net.nsd.NsdManager.ResolveListener {
+                        override fun onResolveFailed(info: android.net.nsd.NsdServiceInfo, errorCode: Int) {
                             resolving.set(false)
                         }
 
-                        override fun onServiceResolved(info: NsdServiceInfo) {
+                        override fun onServiceResolved(info: android.net.nsd.NsdServiceInfo) {
                             val address = info.host?.hostAddress
                             val port = info.port
                             if (!address.isNullOrBlank() && port > 0) {
@@ -245,7 +297,7 @@ class LocalControlServerService : Service() {
                 }
             }
 
-            override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
+            override fun onServiceLost(serviceInfo: android.net.nsd.NsdServiceInfo) = Unit
             override fun onDiscoveryStopped(serviceType: String) { discoveryStopped.set(true) }
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
                 try { nsd.stopServiceDiscovery(this) } catch (_: Exception) {}
@@ -257,7 +309,7 @@ class LocalControlServerService : Service() {
         }
 
         try {
-            nsd.discoverServices(ADB_CONNECT_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+            nsd.discoverServices(ADB_CONNECT_SERVICE_TYPE, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, discoveryListener)
             latch.await(NSD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.w(TAG, "ADB mDNS discovery failed", e)
@@ -300,7 +352,7 @@ class LocalControlServerService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Auto Wi-Fi Debug server", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(CHANNEL_ID, "Auto Wi‑Fi Debug server", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -312,7 +364,7 @@ class LocalControlServerService : Service() {
         )
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("Auto Wi-Fi Debug")
+                .setContentTitle("Auto Wi‑Fi Debug")
                 .setContentText("Monitoring Wireless debugging; localhost API port $PORT")
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentIntent(openApp)
@@ -321,7 +373,7 @@ class LocalControlServerService : Service() {
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setContentTitle("Auto Wi-Fi Debug")
+                .setContentTitle("Auto Wi‑Fi Debug")
                 .setContentText("Monitoring Wireless debugging; localhost API port $PORT")
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentIntent(openApp)
