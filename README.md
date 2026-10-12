@@ -38,9 +38,10 @@ The APK hosts a localhost-only HTTP server on port **23456**. It does not listen
 
 - `GET http://127.0.0.1:23456/status` returns the setting/server status.
 - `POST http://127.0.0.1:23456/enable` attempts to set `adb_wifi_enabled=1`.
-- The listening socket closes when the `adb_wifi_enabled` setting is on.
-- A foreground monitoring service checks the setting every second and reopens the socket when the setting is off.
-- Open Auto Wi-Fi Debug at least once to start the monitoring service. Android may stop services if the app is force-stopped or restricted by battery settings.
+- The listening socket stays available even when Wireless debugging is enabled or Wi-Fi disconnects.
+- `POST http://127.0.0.1:23456/stop` explicitly stops the service.
+- The app registers a boot receiver for `BOOT_COMPLETED` and vendor `QUICKBOOT_POWERON` broadcasts.
+- Open Auto Wi-Fi Debug at least once after installation. On Samsung, set the app battery use to Unrestricted and enable any available Auto start option. Android may still restrict startup if the app is force-stopped.
 
 No Termux RUN_COMMAND permission, broadcast response file, or `allow-external-apps=true` setting is needed for this HTTP approach.
 
