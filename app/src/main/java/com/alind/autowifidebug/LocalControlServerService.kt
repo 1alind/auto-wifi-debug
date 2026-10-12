@@ -28,8 +28,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Loopback-only HTTP API. The monitoring service stays alive, but the socket is
- * closed whenever adb_wifi_enabled is on and rebound when it becomes off.
+ * Loopback-only HTTP API. The server remains available regardless of Wi-Fi or
+ * Wireless debugging state, until an explicit POST /stop request.
  */
 class LocalControlServerService : Service() {
     @Volatile private var running = false
@@ -65,12 +65,6 @@ class LocalControlServerService : Service() {
     private fun serverLoop() {
         while (running) {
             try {
-                if (isDebuggingSettingOn()) {
-                    closeServer()
-                    Thread.sleep(POLL_MS)
-                    continue
-                }
-
                 if (serverSocket == null) {
                     val socket = ServerSocket(PORT, 16, InetAddress.getByName("127.0.0.1"))
                     socket.soTimeout = 1000
@@ -125,7 +119,7 @@ class LocalControlServerService : Service() {
                 path == "/" -> json("OK", "port" to PORT.toString(), "endpoints" to "[\"GET /status\",\"POST /enable\"]")
                 else -> json("NOT_FOUND", "error" to "\"Use /status or /enable\"")
             }
-            val statusCode = if (path == "/status" || path == "/enable" || path == "/") 200 else 404
+            val statusCode = if (path == "/status" || path == "/enable" || path == "/stop" || path == "/") 200 else 404
             val bytes = body.toByteArray(StandardCharsets.UTF_8)
             val output = client.getOutputStream()
             output.write(("HTTP/1.1 $statusCode ${if (statusCode == 200) "OK" else "Not Found"}\r\n" +
@@ -134,6 +128,10 @@ class LocalControlServerService : Service() {
                 "Connection: close\r\n\r\n").toByteArray(StandardCharsets.US_ASCII))
             output.write(bytes)
             output.flush()
+            if (path == "/stop" && method == "POST") {
+                Log.i(TAG, "Received explicit stop request")
+                stopSelf()
+            }
         }
     }
 
