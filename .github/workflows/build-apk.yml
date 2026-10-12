@@ -4,7 +4,7 @@ on:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,10 +19,18 @@ jobs:
         with:
           gradle-version: "8.9"
       - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: auto-wifi-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+      - name: Publish downloadable APK release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-build-${{ github.run_number }}
+          name: Auto Wi-Fi Debug APK build ${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
+          draft: false
+          prerelease: true
