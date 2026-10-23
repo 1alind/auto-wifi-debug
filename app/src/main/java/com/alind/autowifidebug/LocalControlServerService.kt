@@ -33,12 +33,10 @@ import java.util.concurrent.atomic.AtomicReference
 class WifiDebugMonitorService : Service() {
     @Volatile private var serviceRunning = false
     private var monitorThread: Thread? = null
-    private val wakeLock = Object()
 
     private val connectivityReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             Log.i(TAG, "Connectivity event: " + intent.action)
-            synchronized(wakeLock) { wakeLock.notifyAll() }
         }
     }
 
@@ -64,7 +62,6 @@ class WifiDebugMonitorService : Service() {
 
     override fun onDestroy() {
         serviceRunning = false
-        synchronized(wakeLock) { wakeLock.notifyAll() }
         monitorThread?.interrupt()
         try {
             unregisterReceiver(connectivityReceiver)
@@ -97,6 +94,8 @@ class WifiDebugMonitorService : Service() {
         var previousDebugSetting = false
         var announcePending = false
         var lastEnableAttempt = 0L
+        var lastDiscoveryTime = 0L
+        var lastAnnouncedEndpoint: Pair<String, Int>? = null
 
         while (serviceRunning) {
             try {
@@ -124,21 +123,27 @@ class WifiDebugMonitorService : Service() {
                     announcePending = true
                 }
 
-                if (wifiConnected && currentDebugSetting && announcePending) {
+                val now = System.currentTimeMillis()
+                val shouldDiscover = announcePending || now - lastDiscoveryTime >= ENDPOINT_POLL_MS
+                if (wifiConnected && currentDebugSetting && shouldDiscover) {
+                    lastDiscoveryTime = now
                     val endpoint = findWirelessDebuggingEndpoint()
                     if (endpoint != null) {
-                        val port = endpoint.second
-                        val webhook = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                            .getString(WEBHOOK_KEY, "").orEmpty().trim()
-                        if (webhook.isNotEmpty()) {
-                            if (sendDiscordMessage(webhook, "connect " + port)) {
-                                Log.i(TAG, "Sent current ADB port to Discord: " + port)
-                                announcePending = false
+                        if (endpoint != lastAnnouncedEndpoint) announcePending = true
+                        if (announcePending) {
+                            val webhook = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                                .getString(WEBHOOK_KEY, "").orEmpty().trim()
+                            if (webhook.isNotEmpty()) {
+                                if (sendDiscordMessage(webhook, "connect " + endpoint.second)) {
+                                    Log.i(TAG, "Sent current ADB port to Discord: " + endpoint.second)
+                                    announcePending = false
+                                    lastAnnouncedEndpoint = endpoint
+                                } else {
+                                    Log.w(TAG, "Discord webhook failed; will retry")
+                                }
                             } else {
-                                Log.w(TAG, "Discord webhook failed; will retry")
+                                Log.w(TAG, "Discord webhook URL not configured; waiting for it to be saved")
                             }
-                        } else {
-                            Log.w(TAG, "Discord webhook URL not configured; waiting for it to be saved")
                         }
                     } else {
                         Log.i(TAG, "ADB mDNS endpoint not found yet; will retry")
@@ -147,9 +152,7 @@ class WifiDebugMonitorService : Service() {
 
                 previousWifiConnected = wifiConnected
                 previousDebugSetting = currentDebugSetting
-                synchronized(wakeLock) {
-                    if (serviceRunning) wakeLock.wait(MONITOR_INTERVAL_MS)
-                }
+                Thread.sleep(MONITOR_INTERVAL_MS)
             } catch (_: InterruptedException) {
                 if (!serviceRunning) break
             } catch (e: Exception) {
@@ -320,6 +323,7 @@ class WifiDebugMonitorService : Service() {
         private const val ADB_CONNECT_SERVICE_TYPE = "_adb-tls-connect._tcp."
         private const val NSD_TIMEOUT_SECONDS = 6L
         private const val MONITOR_INTERVAL_MS = 3000L
+        private const val ENDPOINT_POLL_MS = 10000L
         private const val ENABLE_RETRY_MS = 10000L
         private const val NOTIFICATION_ID = 23456
         private const val CHANNEL_ID = "wifi_debug_monitor"
