@@ -33,10 +33,20 @@ import java.util.concurrent.atomic.AtomicReference
 class WifiDebugMonitorService : Service() {
     @Volatile private var serviceRunning = false
     private var monitorThread: Thread? = null
+    @Volatile private var receiverLastWifiConnected = false
+    private val wifiReconnectEvent = AtomicBoolean(false)
 
     private val connectivityReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            Log.i(TAG, "Connectivity event: " + intent.action)
+            val connected = isConnectedToWifi()
+            val wasConnected = receiverLastWifiConnected
+            receiverLastWifiConnected = connected
+            if (connected && !wasConnected) {
+                wifiReconnectEvent.set(true)
+                Log.i(TAG, "Wi-Fi reconnect event received")
+            } else {
+                Log.i(TAG, "Connectivity event: " + intent.action)
+            }
         }
     }
 
@@ -44,6 +54,7 @@ class WifiDebugMonitorService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
+        receiverLastWifiConnected = isConnectedToWifi()
         registerConnectivityReceiver()
     }
 
@@ -101,8 +112,9 @@ class WifiDebugMonitorService : Service() {
             try {
                 val wifiConnected = isConnectedToWifi()
                 val debugSetting = isDebuggingSettingOn()
+                val reconnectEvent = wifiReconnectEvent.getAndSet(false)
 
-                if (wifiConnected && !previousWifiConnected) {
+                if (wifiConnected && (!previousWifiConnected || reconnectEvent)) {
                     announcePending = true
                     Log.i(TAG, "Wi-Fi connected; will rediscover and announce the ADB port")
                 }
