@@ -1,6 +1,6 @@
 # Auto Wi-Fi Debug
 
-Android app for Android 11+ with a local HTTP API for Termux automation.
+Android app for automatically monitoring Wireless debugging and posting its current ADB port to a Discord webhook.
 
 ## One-time Android permission
 
@@ -10,45 +10,30 @@ After installing the APK, grant the secure-settings permission from an authorize
 
 This does not require root, but it does require an authorized ADB shell for the one-time grant.
 
-## Termux setup
+## Configure Discord
 
-Install Termux:API and the command-line tools:
+1. Create a Discord webhook for the channel that should receive the port.
+2. Open Auto Wi-Fi Debug and paste the webhook URL in the **Discord Webhook** field.
+3. Tap **Save webhook URL**.
 
-`pkg install termux-api curl`
+The app sends only messages formatted like `connect 45827`. Keep the webhook URL secret: anyone who obtains it can post to that channel. The URL is stored in the app's private preferences and is not hardcoded into the APK.
 
-Download the companion client:
+## Behavior
 
-```sh
-mkdir -p ~/.autowifidebug
-curl -L https://raw.githubusercontent.com/1alind/auto-wifi-debug/main/termux/auto-wifi-debug.sh -o ~/.autowifidebug/auto-wifi-debug.sh
-chmod +x ~/.autowifidebug/auto-wifi-debug.sh
-```
+- The app starts a foreground monitoring service when launched.
+- A boot receiver attempts to start the service after reboot. On Samsung, set battery usage to Unrestricted and enable any available Auto start option.
+- When Wi-Fi is connected, the service attempts to set Android's `adb_wifi_enabled` setting to on, provided `WRITE_SECURE_SETTINGS` was granted.
+- It discovers the actual ADB TLS endpoint using Android NSD/mDNS service `_adb-tls-connect._tcp.`. It does not scan all ports.
+- When debugging becomes enabled or Wi-Fi reconnects, it rediscovers the endpoint and posts `connect PORT` to Discord.
+- If discovery or webhook delivery fails, it retries. It does not intentionally send repeated messages after a successful send for the same observed event.
+- The app does not host an HTTP server and does not run a Termux script.
 
-## Run
+## Limitations
 
-```sh
-bash ~/.autowifidebug/auto-wifi-debug.sh
-```
+A value of 1 for `adb_wifi_enabled` does not guarantee that Wireless debugging is actually available. Android/Samsung firmware can override the setting or require confirmation in Developer options. NSD discovery, webhook delivery, and boot startup can also be delayed or restricted by Android. The app retries, but it cannot bypass system security restrictions.
 
-The client turns Wi-Fi on first, opens the APK, then sends an HTTP request to `127.0.0.1:23456/enable`.
-
-## Local API and automatic server lifecycle
-
-The APK hosts a localhost-only HTTP server on port **23456**. It does not listen on the Wi-Fi/LAN interface.
-
-- `GET http://127.0.0.1:23456/status` returns the setting/server status.
-- `POST http://127.0.0.1:23456/enable` attempts to set `adb_wifi_enabled=1`.
-- The listening socket stays available even when Wireless debugging is enabled or Wi-Fi disconnects.
-- `POST http://127.0.0.1:23456/stop` explicitly stops the service.
-- The app registers a boot receiver for `BOOT_COMPLETED` and vendor `QUICKBOOT_POWERON` broadcasts.
-- Open Auto Wi-Fi Debug at least once after installation. On Samsung, set the app battery use to Unrestricted and enable any available Auto start option. Android may still restrict startup if the app is force-stopped.
-
-No Termux RUN_COMMAND permission, broadcast response file, or `allow-external-apps=true` setting is needed for this HTTP approach.
-
-## Important limitation
-
-The server checks the Android global setting `adb_wifi_enabled`. A value of 1 does **not** guarantee the actual Wireless debugging feature is available or reachable. Android/Samsung firmware can override the setting or require approval in Developer options. Test on the Galaxy A50 (Android 11) and Galaxy A52 (Android 14). The app cannot bypass Android's security prompts.
+Test on the target phone after installing, granting permission, configuring the webhook, and rebooting.
 
 ## Build
 
-GitHub Actions builds a debug APK on pushes to `main` and manual workflow runs, and publishes a prerelease APK.
+GitHub Actions builds a debug APK on pushes to `main` and publishes a prerelease APK.
