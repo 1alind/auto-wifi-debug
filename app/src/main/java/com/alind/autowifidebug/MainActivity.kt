@@ -4,18 +4,17 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import android.os.Handler
-import android.os.Looper
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputType
 import android.view.Gravity
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -24,6 +23,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var permissionStatus: TextView
+    private lateinit var webhookInput: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,7 +44,7 @@ class MainActivity : Activity() {
         root.addView(space(8))
         root.addView(text("Auto Wi-Fi Debug", 29f, Color.WHITE, true))
         root.addView(space(8))
-        root.addView(text("A small helper for turning Wireless debugging on from the app or your own automation.", 15f, Color.rgb(207, 218, 233), false))
+        root.addView(text("Automatically monitors Wireless debugging and posts the current ADB port to Discord.", 15f, Color.rgb(207, 218, 233), false))
         root.addView(space(24))
 
         val statusCard = card()
@@ -56,12 +56,54 @@ class MainActivity : Activity() {
         root.addView(space(14))
 
         root.addView(Button(this).apply {
-            text = "Turn Wireless Debugging ON"
+            text = "Start / retry monitor"
             isAllCaps = false
             textSize = 15f
-            setOnClickListener { enableWirelessDebugging() }
+            setOnClickListener {
+                startMonitorService()
+                Toast.makeText(this@MainActivity, "Monitor is running; waiting for Wi-Fi and Wireless debugging.", Toast.LENGTH_LONG).show()
+            }
         }, LinearLayout.LayoutParams(-1, dp(54)))
-        root.addView(space(10))
+        root.addView(space(14))
+
+        val webhookCard = card()
+        webhookCard.addView(text("DISCORD WEBHOOK", 12f, Color.rgb(163, 185, 212), true))
+        webhookCard.addView(space(8))
+        webhookCard.addView(text("Paste your Discord webhook URL. The app sends only messages like: connect 45827", 14f, Color.rgb(207, 218, 233), false))
+        webhookCard.addView(space(8))
+        webhookInput = EditText(this).apply {
+            hint = "https://discord.com/api/webhooks/…"
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setText(getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(WifiDebugMonitorService.WEBHOOK_KEY, ""))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.rgb(170, 184, 202))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = GradientDrawable().apply {
+                setColor(Color.argb(35, 255, 255, 255))
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), Color.argb(65, 255, 255, 255))
+            }
+        }
+        webhookCard.addView(webhookInput, LinearLayout.LayoutParams(-1, dp(52)))
+        webhookCard.addView(space(8))
+        webhookCard.addView(Button(this).apply {
+            text = "Save webhook URL"
+            isAllCaps = false
+            setOnClickListener {
+                val value = webhookInput.text.toString().trim()
+                if (value.isNotEmpty() && (!value.startsWith("https://discord.com/api/webhooks/") &&
+                    !value.startsWith("https://discordapp.com/api/webhooks/"))) {
+                    Toast.makeText(this@MainActivity, "Enter a valid Discord webhook URL.", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putString(WifiDebugMonitorService.WEBHOOK_KEY, value).apply()
+                Toast.makeText(this@MainActivity, if (value.isEmpty()) "Webhook cleared." else "Webhook saved.", Toast.LENGTH_SHORT).show()
+            }
+        })
+        root.addView(webhookCard)
+        root.addView(space(14))
 
         val setupCard = card()
         setupCard.addView(text("ONE-TIME PERMISSION", 12f, Color.rgb(163, 185, 212), true))
@@ -87,10 +129,10 @@ class MainActivity : Activity() {
             setOnClickListener { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
         })
         root.addView(space(12))
-        root.addView(text("Android may require a system confirmation. Connect to Wi-Fi first. This app cannot bypass Android's security prompts.", 13f, Color.rgb(207, 218, 233), false))
+        root.addView(text("Connect to Wi-Fi first. Android/Samsung may refuse automatic Wireless debugging changes or restrict boot startup.", 13f, Color.rgb(207, 218, 233), false))
 
         setContentView(scroll)
-        startLocalServerService()
+        startMonitorService()
         refreshStatus()
     }
 
@@ -99,62 +141,24 @@ class MainActivity : Activity() {
         if (::status.isInitialized) refreshStatus()
     }
 
-    private fun startLocalServerService() {
+    private fun startMonitorService() {
         try {
-            startForegroundService(Intent(this, LocalControlServerService::class.java))
+            val serviceIntent = Intent(this, WifiDebugMonitorService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent)
+            else startService(serviceIntent)
         } catch (e: Exception) {
-            Toast.makeText(this, "Could not start the local API service: ${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Could not start monitor: " + e.message, Toast.LENGTH_LONG).show()
         }
-    }
-
-    private fun enableWirelessDebugging() {
-        if (!hasPermission()) {
-            Toast.makeText(this, "Grant the one-time ADB permission first.", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (!isConnectedToWifi()) {
-            Toast.makeText(this, "Connect to Wi-Fi first. Android requires an active Wi-Fi network.", Toast.LENGTH_LONG).show()
-            return
-        }
-        try {
-            val wrote = Settings.Global.putInt(contentResolver, SETTING_ADB_WIFI_ENABLED, 1)
-            if (!wrote) {
-                Toast.makeText(this, "Android rejected the setting change.", Toast.LENGTH_LONG).show()
-                return
-            }
-            status.text = "Checking Android…"
-            Toast.makeText(this, "Checking whether Android accepted the change…", Toast.LENGTH_SHORT).show()
-            Handler(Looper.getMainLooper()).postDelayed({
-                refreshStatus()
-                val enabled = try {
-                    Settings.Global.getInt(contentResolver, SETTING_ADB_WIFI_ENABLED, 0) == 1
-                } catch (_: Exception) { false }
-                if (enabled) {
-                    Toast.makeText(this, "Wireless debugging setting is ON.", Toast.LENGTH_LONG).show()
-                } else {
-                    Toast.makeText(this, "Android turned it back OFF. Open Developer options > Wireless debugging and approve this Wi-Fi network once.", Toast.LENGTH_LONG).show()
-                }
-            }, 1800)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Could not enable Wireless debugging", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun isConnectedToWifi(): Boolean {
-        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = manager.activeNetwork ?: return false
-        val capabilities = manager.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
     }
 
     private fun refreshStatus() {
         val enabled = try {
             Settings.Global.getInt(contentResolver, SETTING_ADB_WIFI_ENABLED, 0) == 1
         } catch (_: Exception) { false }
-        status.text = if (enabled) "●  ON" else "○  OFF"
+        status.text = if (enabled) "●  ON (setting)" else "○  OFF"
         status.setTextColor(if (enabled) Color.rgb(112, 231, 170) else Color.rgb(255, 202, 120))
         permissionStatus.text = if (hasPermission()) {
-            "Permission granted. The app can request the Wireless debugging toggle."
+            "Permission granted. The monitor can request the Wireless debugging toggle."
         } else {
             "Permission not granted. Copy the command and run it from an authorized ADB shell."
         }
@@ -190,6 +194,7 @@ class MainActivity : Activity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val PREFS = "auto_wifi_debug"
         private const val SETTING_ADB_WIFI_ENABLED = "adb_wifi_enabled"
         private const val GRANT_COMMAND =
             "adb shell pm grant com.alind.autowifidebug android.permission.WRITE_SECURE_SETTINGS"
