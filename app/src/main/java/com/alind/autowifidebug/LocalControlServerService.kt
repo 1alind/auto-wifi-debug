@@ -35,9 +35,15 @@ class WifiDebugMonitorService : Service() {
     private var monitorThread: Thread? = null
     @Volatile private var receiverLastWifiConnected = false
     private val wifiReconnectEvent = AtomicBoolean(false)
+    private val connectPortRequest = AtomicBoolean(false)
 
     private val connectivityReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == ACTION_CONNECT_PORT) {
+                connectPortRequest.set(true)
+                Log.i(TAG, "Received Termux connect-port broadcast")
+                return
+            }
             val connected = isConnectedToWifi()
             val wasConnected = receiverLastWifiConnected
             receiverLastWifiConnected = connected
@@ -87,10 +93,12 @@ class WifiDebugMonitorService : Service() {
             addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
             addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
             addAction(ConnectivityManager.CONNECTIVITY_ACTION)
+            addAction(ACTION_CONNECT_PORT)
         }
         try {
             if (Build.VERSION.SDK_INT >= 33) {
-                registerReceiver(connectivityReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                // Exported so an explicit broadcast from Termux can trigger a port announcement.
+                registerReceiver(connectivityReceiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 @Suppress("DEPRECATION")
                 registerReceiver(connectivityReceiver, filter)
@@ -113,6 +121,11 @@ class WifiDebugMonitorService : Service() {
                 val wifiConnected = isConnectedToWifi()
                 val debugSetting = isDebuggingSettingOn()
                 val reconnectEvent = wifiReconnectEvent.getAndSet(false)
+                val manualConnectPort = connectPortRequest.getAndSet(false)
+                if (manualConnectPort) {
+                    announcePending = true
+                    Log.i(TAG, "Manual connect-port request queued")
+                }
 
                 val wifiJustReconnected = wifiConnected && (!previousWifiConnected || reconnectEvent)
                 if (wifiJustReconnected) {
@@ -331,6 +344,7 @@ class WifiDebugMonitorService : Service() {
     }
 
     companion object {
+        const val ACTION_CONNECT_PORT = "com.alind.autowifidebug.CONNECT_PORT"
         private const val TAG = "AutoWifiDebugMonitor"
         private const val PREFS = "auto_wifi_debug"
         const val WEBHOOK_KEY = "discord_webhook_url"
