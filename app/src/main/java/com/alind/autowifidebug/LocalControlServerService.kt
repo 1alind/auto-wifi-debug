@@ -114,9 +114,12 @@ class WifiDebugMonitorService : Service() {
                 val debugSetting = isDebuggingSettingOn()
                 val reconnectEvent = wifiReconnectEvent.getAndSet(false)
 
-                if (wifiConnected && (!previousWifiConnected || reconnectEvent)) {
+                val wifiJustReconnected = wifiConnected && (!previousWifiConnected || reconnectEvent)
+                if (wifiJustReconnected) {
                     announcePending = true
-                    Log.i(TAG, "Wi-Fi connected; will rediscover and announce the ADB port")
+                    // Do not wait for the normal retry interval after Wi-Fi returns.
+                    lastEnableAttempt = 0L
+                    Log.i(TAG, "Wi-Fi connected; immediately rechecking Wireless debugging")
                 }
 
                 if (debugSetting && !previousDebugSetting) {
@@ -124,7 +127,8 @@ class WifiDebugMonitorService : Service() {
                     Log.i(TAG, "Wireless debugging setting changed to ON")
                 }
 
-                if (wifiConnected && !debugSetting &&
+                if (wifiConnected &&
+                    (wifiJustReconnected || !debugSetting) &&
                     System.currentTimeMillis() - lastEnableAttempt >= ENABLE_RETRY_MS) {
                     lastEnableAttempt = System.currentTimeMillis()
                     attemptEnableDebugging()
