@@ -26,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 
 class MainActivity : Activity() {
+    private val webhookFilePickerRequest = 7104
     private lateinit var status: TextView
     private lateinit var permissionStatus: TextView
     private lateinit var webhookInput: EditText
@@ -93,6 +94,22 @@ class MainActivity : Activity() {
         webhookCard.addView(webhookInput, LinearLayout.LayoutParams(-1, dp(52)))
         webhookCard.addView(space(8))
         webhookCard.addView(Button(this).apply {
+            text = "Load webhook from port-webhook.txt"
+            isAllCaps = false
+            setOnClickListener {
+                val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "text/plain"
+                }
+                try {
+                    startActivityForResult(picker, webhookFilePickerRequest)
+                } catch (e: Exception) {
+                    Toast.makeText(this@MainActivity, "Could not open file picker: " + e.message, Toast.LENGTH_LONG).show()
+                }
+            }
+        })
+        webhookCard.addView(space(8))
+        webhookCard.addView(Button(this).apply {
             text = "Save webhook URL"
             isAllCaps = false
             setOnClickListener {
@@ -148,6 +165,36 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
+    @Deprecated("Deprecated in Android API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != webhookFilePickerRequest || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try {
+            val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            contentResolver.takePersistableUriPermission(uri, flags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val raw = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                .orEmpty().trim()
+            val value = raw.lineSequence().map { it.trim() }
+                .firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
+                .orEmpty().let { line ->
+                    if (line.startsWith("DISCORD_WEBHOOK_URL=")) line.substringAfter("=")
+                        .trim().trim('"', '\\'') else line
+                }
+            if (!value.startsWith("https://discord.com/api/webhooks/") &&
+                !value.startsWith("https://discordapp.com/api/webhooks/")) {
+                Toast.makeText(this, "File must contain a Discord webhook URL on one line.", Toast.LENGTH_LONG).show()
+                return
+            }
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(WifiDebugMonitorService.WEBHOOK_KEY, value).apply()
+            webhookInput.setText(value)
+            Toast.makeText(this, "Webhook loaded from file and saved.", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Could not read webhook file: " + (e.message ?: "unknown error"), Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (::status.isInitialized) refreshStatus()
@@ -192,7 +239,6 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     try {
                         stopService(Intent(this, WifiDebugMonitorService::class.java))
-                        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit()
                         val uri = FileProvider.getUriForFile(this, packageName + ".fileprovider", apk)
                         val installIntent = Intent(Intent.ACTION_VIEW).apply {
                             setDataAndType(uri, "application/vnd.android.package-archive")
