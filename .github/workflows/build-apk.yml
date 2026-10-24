@@ -35,4 +35,4 @@ jobs:
           name: Auto Wi-Fi Debug APK build ${{ github.run_number }}
           files: app/build/outputs/apk/debug/app-debug.apk
           draft: false
-          prerelease: true
+          prerelease: false
