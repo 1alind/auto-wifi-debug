@@ -124,7 +124,14 @@ class WifiDebugMonitorService : Service() {
                 val manualConnectPort = connectPortRequest.getAndSet(false)
                 if (manualConnectPort) {
                     announcePending = true
-                    Log.i(TAG, "Manual connect-port request queued")
+                    // A Termux ping means: try to enable Wireless debugging now,
+                    // then wait for the real ADB endpoint before announcing its port.
+                    lastEnableAttempt = 0L
+                    if (isWifiEnabled() && wifiConnected && !debugSetting) {
+                        attemptEnableDebugging()
+                        lastEnableAttempt = System.currentTimeMillis()
+                    }
+                    Log.i(TAG, "Manual connect-port request queued; requested Wireless debugging enable")
                 }
 
                 val wifiJustReconnected = wifiConnected && (!previousWifiConnected || reconnectEvent)
