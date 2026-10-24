@@ -20,6 +20,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
+      - name: Configure persistent debug signing key
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_DEBUG_KEYSTORE_BASE64" ]; then
+            echo "::error::Missing repository secret ANDROID_DEBUG_KEYSTORE_BASE64. Add the persistent Android debug keystore as a Base64-encoded GitHub Actions secret."
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey
       - name: Build debug APK
         run: gradle --no-daemon assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
