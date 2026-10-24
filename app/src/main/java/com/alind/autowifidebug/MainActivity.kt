@@ -179,7 +179,7 @@ class MainActivity : Activity() {
                 .firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
                 .orEmpty().let { line ->
                     if (line.startsWith("DISCORD_WEBHOOK_URL=")) line.substringAfter("=")
-                        .trim().trim('"', '\\'') else line
+                        .trim().removeSurrounding("\"").removeSurrounding("'") else line
                 }
             if (!value.startsWith("https://discord.com/api/webhooks/") &&
                 !value.startsWith("https://discordapp.com/api/webhooks/")) {
