@@ -5,6 +5,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.FileProvider
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -124,6 +129,13 @@ class MainActivity : Activity() {
         root.addView(space(14))
 
         root.addView(Button(this).apply {
+            text = "Check for Update"
+            isAllCaps = false
+            setOnClickListener { checkForUpdate() }
+        }, LinearLayout.LayoutParams(-1, dp(54)))
+        root.addView(space(12))
+
+        root.addView(Button(this).apply {
             text = "Open Developer options"
             isAllCaps = false
             setOnClickListener { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
@@ -139,6 +151,64 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (::status.isInitialized) refreshStatus()
+    }
+
+    private fun checkForUpdate() {
+        Toast.makeText(this, "Checking GitHub for the latest release…", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                val api = URL("https://api.github.com/repos/1alind/auto-wifi-debug/releases/latest")
+                val connection = api.openConnection() as HttpURLConnection
+                connection.connectTimeout = 15000
+                connection.readTimeout = 15000
+                connection.setRequestProperty("Accept", "application/vnd.github+json")
+                val releaseText = connection.inputStream.bufferedReader().use { it.readText() }
+                connection.disconnect()
+                val release = JSONObject(releaseText)
+                val latestTag = release.optString("tag_name", "latest")
+                val assets = release.optJSONArray("assets")
+                var apkUrl: String? = null
+                if (assets != null) {
+                    for (i in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(i)
+                        if (asset.optString("name").endsWith(".apk", ignoreCase = true)) {
+                            apkUrl = asset.optString("browser_download_url")
+                            break
+                        }
+                    }
+                }
+                if (apkUrl.isNullOrBlank()) throw IllegalStateException("No APK asset found in GitHub Release.")
+                val apk = File(cacheDir, "auto-wifi-debug-update.apk")
+                val download = URL(apkUrl).openConnection() as HttpURLConnection
+                download.connectTimeout = 15000
+                download.readTimeout = 30000
+                download.instanceFollowRedirects = true
+                download.inputStream.use { input -> apk.outputStream().use { output -> input.copyTo(output) } }
+                download.disconnect()
+                if (!apk.exists() || apk.length() < 100_000L) {
+                    apk.delete()
+                    throw IllegalStateException("Downloaded APK looks incomplete.")
+                }
+                runOnUiThread {
+                    try {
+                        stopService(Intent(this, WifiDebugMonitorService::class.java))
+                        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit()
+                        val uri = FileProvider.getUriForFile(this, packageName + ".fileprovider", apk)
+                        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "application/vnd.android.package-archive")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        Toast.makeText(this, "Downloaded " + latestTag + ". Confirm installation in Android.", Toast.LENGTH_LONG).show()
+                        startActivity(installIntent)
+                    } catch (e: Exception) {
+                        Toast.makeText(this, "Could not open installer: " + e.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { Toast.makeText(this, "Update failed: " + (e.message ?: "unknown error"), Toast.LENGTH_LONG).show() }
+            }
+        }.start()
     }
 
     private fun startMonitorService() {
