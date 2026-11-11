@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Monitors Wi-Fi and Wireless debugging, then posts the current ADB port to Discord.
+ * Monitors Wi-Fi and Wireless debugging, then saves the latest ADB port locally.
  * No HTTP control server is hosted by this service.
  */
 class WifiDebugMonitorService : Service() {
@@ -38,7 +38,7 @@ class WifiDebugMonitorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         serviceRunning = true
         if (monitorThread?.isAlive != true) {
-            monitorThread = Thread({ monitorLoop() }, "WifiDebugDiscordMonitor").apply {
+            monitorThread = Thread({ monitorLoop() }, "WifiDebugPortMonitor").apply {
                 isDaemon = true
                 start()
             }
@@ -246,7 +246,7 @@ class WifiDebugMonitorService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
                 .setContentTitle("Auto Wi-Fi Debug")
-                .setContentText("Monitoring Wireless debugging and Discord port updates")
+                .setContentText("Saving the latest Wireless debugging ADB port")
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentIntent(openApp)
                 .setOngoing(true)
