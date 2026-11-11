@@ -5,10 +5,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
@@ -18,9 +16,6 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -35,40 +30,12 @@ class WifiDebugMonitorService : Service() {
     private var monitorThread: Thread? = null
     @Volatile private var receiverLastWifiConnected = false
     private val wifiReconnectEvent = AtomicBoolean(false)
-    private val connectPortRequest = AtomicBoolean(false)
-    @Volatile private var discoveredPairingEndpoint: Pair<String, Int>? = null
-    @Volatile private var pendingPairingCode: String? = null
-
-    private val connectivityReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == PairingCodeAccessibilityService.ACTION_PAIRING_CODE) {
-                pendingPairingCode = intent.getStringExtra(PairingCodeAccessibilityService.EXTRA_PAIRING_CODE)
-                Log.i(TAG, "Pairing code received from accessibility helper")
-                return
-            }
-            if (intent.action == ACTION_CONNECT_PORT) {
-                connectPortRequest.set(true)
-                Log.i(TAG, "Received Termux connect-port broadcast")
-                return
-            }
-            val connected = isConnectedToWifi()
-            val wasConnected = receiverLastWifiConnected
-            receiverLastWifiConnected = connected
-            if (connected && !wasConnected) {
-                wifiReconnectEvent.set(true)
-                Log.i(TAG, "Wi-Fi reconnect event received")
-            } else {
-                Log.i(TAG, "Connectivity event: " + intent.action)
-            }
-        }
-    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         receiverLastWifiConnected = isConnectedToWifi()
-        registerConnectivityReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -87,33 +54,7 @@ class WifiDebugMonitorService : Service() {
     override fun onDestroy() {
         serviceRunning = false
         monitorThread?.interrupt()
-        try {
-            unregisterReceiver(connectivityReceiver)
-        } catch (_: IllegalArgumentException) {
-            // Receiver was not registered.
-        }
         super.onDestroy()
-    }
-
-    private fun registerConnectivityReceiver() {
-        val filter = IntentFilter().apply {
-            addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
-            addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
-            addAction(ConnectivityManager.CONNECTIVITY_ACTION)
-            addAction(ACTION_CONNECT_PORT)
-            addAction(PairingCodeAccessibilityService.ACTION_PAIRING_CODE)
-        }
-        try {
-            if (Build.VERSION.SDK_INT >= 33) {
-                // Exported so an explicit broadcast from Termux can trigger a port announcement.
-                registerReceiver(connectivityReceiver, filter, Context.RECEIVER_EXPORTED)
-            } else {
-                @Suppress("DEPRECATION")
-                registerReceiver(connectivityReceiver, filter)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not register connectivity listener", e)
-        }
     }
 
     private fun monitorLoop() {
@@ -122,29 +63,12 @@ class WifiDebugMonitorService : Service() {
         var announcePending = false
         var lastEnableAttempt = 0L
         var lastDiscoveryTime = 0L
-        var lastAnnouncedEndpoint: Pair<String, Int>? = null
-        var pairingScreenRequested = false
 
         while (serviceRunning) {
             try {
-                loadWebhookFromConfigFile()
                 val wifiConnected = isConnectedToWifi()
                 val debugSetting = isDebuggingSettingOn()
-                val reconnectEvent = wifiReconnectEvent.getAndSet(false)
-                val manualConnectPort = connectPortRequest.getAndSet(false)
-                if (manualConnectPort) {
-                    announcePending = true
-                    // A Termux ping means: try to enable Wireless debugging now,
-                    // then wait for the real ADB endpoint before announcing its port.
-                    lastEnableAttempt = 0L
-                    if (isWifiEnabled() && wifiConnected && !debugSetting) {
-                        attemptEnableDebugging()
-                        lastEnableAttempt = System.currentTimeMillis()
-                    }
-                    Log.i(TAG, "Manual connect-port request queued; requested Wireless debugging enable")
-                }
-
-                val wifiJustReconnected = wifiConnected && (!previousWifiConnected || reconnectEvent)
+                val wifiJustReconnected = wifiConnected && !previousWifiConnected
                 if (wifiJustReconnected) {
                     announcePending = true
                     // Do not wait for the normal retry interval after Wi-Fi returns.
@@ -168,48 +92,15 @@ class WifiDebugMonitorService : Service() {
                 if (currentDebugSetting && !previousDebugSetting) {
                     announcePending = true
                 }
-                if (wifiConnected && currentDebugSetting && !pairingScreenRequested) {
-                    pairingScreenRequested = true
-                    sendBroadcast(Intent(PairingCodeAccessibilityService.ACTION_OPEN_PAIRING_SCREEN).setPackage(packageName))
-                    Log.i(TAG, "Requested automatic Wireless debugging pairing-screen navigation")
-                }
-                if (!wifiConnected || !currentDebugSetting) pairingScreenRequested = false
-
                 val now = System.currentTimeMillis()
                 val shouldDiscover = announcePending || now - lastDiscoveryTime >= ENDPOINT_POLL_MS
                 if (wifiConnected && currentDebugSetting && shouldDiscover) {
                     lastDiscoveryTime = now
-                    val pairingEndpoint = findWirelessPairingEndpoint()
-                    if (pairingEndpoint != null) discoveredPairingEndpoint = pairingEndpoint
-                    val pairingCode = pendingPairingCode
-                    val knownPairingEndpoint = discoveredPairingEndpoint
-                    if (!pairingCode.isNullOrBlank() && knownPairingEndpoint != null) {
-                        val host = if (knownPairingEndpoint.first.contains(":")) "[${knownPairingEndpoint.first}]" else knownPairingEndpoint.first
-                        val command = "pair $host:${knownPairingEndpoint.second} $pairingCode"
-                        val webhook = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(WEBHOOK_KEY, "").orEmpty().trim()
-                        if (webhook.isNotEmpty() && sendDiscordMessage(webhook, command)) {
-                            Log.i(TAG, "Sent pairing command to Discord")
-                            pendingPairingCode = null
-                        }
-                    }
                     val endpoint = findWirelessDebuggingEndpoint()
                     if (endpoint != null) {
-                        if (endpoint != lastAnnouncedEndpoint) announcePending = true
-                        if (announcePending) {
-                            val webhook = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                                .getString(WEBHOOK_KEY, "").orEmpty().trim()
-                            if (webhook.isNotEmpty()) {
-                                if (sendDiscordMessage(webhook, "connect " + endpoint.second)) {
-                                    Log.i(TAG, "Sent current ADB port to Discord: " + endpoint.second)
-                                    announcePending = false
-                                    lastAnnouncedEndpoint = endpoint
-                                } else {
-                                    Log.w(TAG, "Discord webhook failed; will retry")
-                                }
-                            } else {
-                                Log.w(TAG, "Discord webhook URL not configured; waiting for it to be saved")
-                            }
-                        }
+                        saveLatestPort(endpoint.second)
+                        announcePending = false
+                        Log.i(TAG, "Saved latest ADB port: " + endpoint.second)
                     } else {
                         Log.i(TAG, "ADB mDNS endpoint not found yet; will retry")
                     }
@@ -226,61 +117,6 @@ class WifiDebugMonitorService : Service() {
                     if (!serviceRunning) break
                 }
             }
-        }
-    }
-
-    private fun loadWebhookFromConfigFile() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            !android.os.Environment.isExternalStorageManager()) return
-
-        val file = java.io.File("/sdcard/autoclick/config/webhook.json")
-        if (!file.isFile || !file.canRead()) return
-
-        try {
-            val jsonText = file.readText(Charsets.UTF_8)
-            val root = org.json.JSONTokener(jsonText).nextValue()
-            val webhookPattern = Regex(
-                """https://(?:discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+""",
-                RegexOption.IGNORE_CASE
-            )
-
-            fun findWebhook(value: Any?): String? {
-                when (value) {
-                    is JSONObject -> {
-                        val keys = value.keys()
-                        while (keys.hasNext()) {
-                            val found = findWebhook(value.opt(keys.next()))
-                            if (found != null) return found
-                        }
-                    }
-                    is org.json.JSONArray -> {
-                        for (i in 0 until value.length()) {
-                            val found = findWebhook(value.opt(i))
-                            if (found != null) return found
-                        }
-                    }
-                    is String -> {
-                        val found = webhookPattern.find(value)?.value
-                        if (found != null) return found
-                    }
-                }
-                return null
-            }
-
-            val webhook = findWebhook(root)
-            if (webhook != null) {
-                val current = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .getString(WEBHOOK_KEY, "").orEmpty()
-                if (current != webhook) {
-                    getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                        .putString(WEBHOOK_KEY, webhook).apply()
-                    Log.i(TAG, "Discord webhook found and loaded from webhook.json")
-                }
-            } else {
-                Log.w(TAG, "No Discord webhook URL found anywhere in webhook.json")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not read or parse webhook.json", e)
         }
     }
 
@@ -362,32 +198,17 @@ class WifiDebugMonitorService : Service() {
         return result.get()
     }
 
-    private fun sendDiscordMessage(webhookUrl: String, message: String): Boolean {
-        var connection: HttpURLConnection? = null
-        return try {
-            val url = URL(webhookUrl)
-            val allowedHost = url.host.equals("discord.com", ignoreCase = true) ||
-                url.host.equals("discordapp.com", ignoreCase = true)
-            if (url.protocol != "https" || !allowedHost) {
-                Log.e(TAG, "Webhook URL must be an HTTPS Discord webhook URL")
-                return false
+    private fun saveLatestPort(port: Int) {
+        try {
+            val directory = java.io.File("/sdcard/autoclick")
+            if (!directory.exists() && !directory.mkdirs()) {
+                Log.e(TAG, "Could not create /sdcard/autoclick")
+                return
             }
-            connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                connectTimeout = 8000
-                readTimeout = 8000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("User-Agent", "Auto-WiFi-Debug")
-            }
-            val body = JSONObject().put("content", message).toString().toByteArray(Charsets.UTF_8)
-            connection.outputStream.use { it.write(body) }
-            connection.responseCode in 200..299
+            val file = java.io.File(directory, "connect_port.txt")
+            file.writeText(port.toString(), Charsets.UTF_8)
         } catch (e: Exception) {
-            Log.w(TAG, "Discord webhook request failed", e)
-            false
-        } finally {
-            connection?.disconnect()
+            Log.e(TAG, "Could not save latest ADB port", e)
         }
     }
 
@@ -421,7 +242,7 @@ class WifiDebugMonitorService : Service() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Auto Wi-Fi Debug")
-                .setContentText("Monitoring Wireless debugging and Discord port updates")
+                .setContentText("Saving the latest Wireless debugging ADB port")
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentIntent(openApp)
                 .setOngoing(true)
@@ -439,14 +260,10 @@ class WifiDebugMonitorService : Service() {
     }
 
     companion object {
-        const val ACTION_CONNECT_PORT = "com.alind.autowifidebug.CONNECT_PORT"
         private const val TAG = "AutoWifiDebugMonitor"
-        private const val PREFS = "auto_wifi_debug"
-        const val WEBHOOK_KEY = "discord_webhook_url"
         private const val SETTING_ADB_WIFI_ENABLED = "adb_wifi_enabled"
         private const val WRITE_SECURE_SETTINGS = "android.permission.WRITE_SECURE_SETTINGS"
         private const val ADB_CONNECT_SERVICE_TYPE = "_adb-tls-connect._tcp."
-        private const val ADB_PAIRING_SERVICE_TYPE = "_adb-tls-pairing._tcp."
         private const val NSD_TIMEOUT_SECONDS = 6L
         private const val MONITOR_INTERVAL_MS = 3000L
         private const val ENDPOINT_POLL_MS = 10000L
