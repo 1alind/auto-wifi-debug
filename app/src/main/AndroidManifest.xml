@@ -30,6 +30,18 @@
             </intent-filter>
         </activity>
         <service
+            android:name=".PairingCodeAccessibilityService"
+            android:label="Auto Wi-Fi Debug pairing helper"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/pairing_accessibility_service" />
+        </service>
+        <service
             android:name=".WifiDebugMonitorService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
