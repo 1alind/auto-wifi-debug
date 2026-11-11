@@ -212,7 +212,7 @@ class WifiDebugMonitorService : Service() {
             val jsonText = file.readText(Charsets.UTF_8)
             val root = org.json.JSONTokener(jsonText).nextValue()
             val webhookPattern = Regex(
-                """https://(?:discord\\.com|discordapp\\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+""",
+                """https://(?:discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+""",
                 RegexOption.IGNORE_CASE
             )
 
