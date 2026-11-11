@@ -9,6 +9,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -102,7 +103,7 @@ class MainActivity : Activity() {
             setOnClickListener { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
         })
         root.addView(space(12))
-        root.addView(text("Connect to Wi-Fi first. Accessibility must be enabled once. Android/Samsung may restrict automatic settings navigation or boot startup.", 13f, Color.rgb(207, 218, 233), false))
+        root.addView(text("Connect to Wi-Fi first. The latest discovered ADB port is saved to /sdcard/autoclick/connect_port.txt.", 13f, Color.rgb(207, 218, 233), false))
 
         setContentView(scroll)
         refreshStatus()
