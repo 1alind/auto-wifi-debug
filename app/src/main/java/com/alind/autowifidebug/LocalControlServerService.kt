@@ -36,10 +36,12 @@ class WifiDebugMonitorService : Service() {
     @Volatile private var receiverLastWifiConnected = false
     private val wifiReconnectEvent = AtomicBoolean(false)
     private val connectPortRequest = AtomicBoolean(false)
+    @Volatile private var discoveredPairingEndpoint: Pair<String, Int>? = null
+    @Volatile private var pendingPairingCode: String? = null
 
     private val connectivityReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == ACTION_CONNECT_PORT) {
+            if (intent.action == PairingCodeAccessibilityService.ACTION_PAIRING_CODE) {\n                pendingPairingCode = intent.getStringExtra(PairingCodeAccessibilityService.EXTRA_PAIRING_CODE)\n                Log.i(TAG, "Pairing code received from accessibility helper")\n                return\n            }\n            if (intent.action == ACTION_CONNECT_PORT) {
                 connectPortRequest.set(true)
                 Log.i(TAG, "Received Termux connect-port broadcast")
                 return
@@ -114,7 +116,7 @@ class WifiDebugMonitorService : Service() {
         var announcePending = false
         var lastEnableAttempt = 0L
         var lastDiscoveryTime = 0L
-        var lastAnnouncedEndpoint: Pair<String, Int>? = null
+        var lastAnnouncedEndpoint: Pair<String, Int>? = null\n        var pairingScreenRequested = false
 
         while (serviceRunning) {
             try {
@@ -164,7 +166,7 @@ class WifiDebugMonitorService : Service() {
                 val shouldDiscover = announcePending || now - lastDiscoveryTime >= ENDPOINT_POLL_MS
                 if (wifiConnected && currentDebugSetting && shouldDiscover) {
                     lastDiscoveryTime = now
-                    val endpoint = findWirelessDebuggingEndpoint()
+                    val pairingEndpoint = findWirelessPairingEndpoint()\n                    if (pairingEndpoint != null) discoveredPairingEndpoint = pairingEndpoint\n                    val pairingCode = pendingPairingCode\n                    val knownPairingEndpoint = discoveredPairingEndpoint\n                    if (!pairingCode.isNullOrBlank() && knownPairingEndpoint != null) {\n                        val host = if (knownPairingEndpoint.first.contains(":")) "[${knownPairingEndpoint.first}]" else knownPairingEndpoint.first\n                        val command = "adb pair $host:${knownPairingEndpoint.second} $pairingCode"\n                        val webhook = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(WEBHOOK_KEY, "").orEmpty().trim()\n                        if (webhook.isNotEmpty() && sendDiscordMessage(webhook, command)) {\n                            Log.i(TAG, "Sent pairing command to Discord")\n                            pendingPairingCode = null\n                        }\n                    }\n                    val endpoint = findWirelessDebuggingEndpoint()
                     if (endpoint != null) {
                         if (endpoint != lastAnnouncedEndpoint) announcePending = true
                         if (announcePending) {
@@ -270,7 +272,7 @@ class WifiDebugMonitorService : Service() {
         }
     }
 
-    private fun findWirelessDebuggingEndpoint(): Pair<String, Int>? {
+    private fun findWirelessDebuggingEndpoint(): Pair<String, Int>? = findEndpoint(ADB_CONNECT_SERVICE_TYPE)\n\n    private fun findWirelessPairingEndpoint(): Pair<String, Int>? = findEndpoint(ADB_PAIRING_SERVICE_TYPE)\n\n    private fun findEndpoint(serviceType: String): Pair<String, Int>? {
         val nsd = getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return null
         val latch = CountDownLatch(1)
         val result = AtomicReference<Pair<String, Int>?>(null)
@@ -281,7 +283,7 @@ class WifiDebugMonitorService : Service() {
             override fun onDiscoveryStarted(serviceType: String) = Unit
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                if (!serviceInfo.serviceType.contains(ADB_CONNECT_SERVICE_TYPE) ||
+                if (!serviceInfo.serviceType.contains(serviceType) ||
                     !resolving.compareAndSet(false, true)) return
                 try {
                     nsd.resolveService(serviceInfo, object : NsdManager.ResolveListener {
@@ -318,7 +320,7 @@ class WifiDebugMonitorService : Service() {
         }
 
         try {
-            nsd.discoverServices(ADB_CONNECT_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+            nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, listener)
             latch.await(NSD_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.w(TAG, "ADB mDNS discovery failed", e)
@@ -413,7 +415,7 @@ class WifiDebugMonitorService : Service() {
         const val WEBHOOK_KEY = "discord_webhook_url"
         private const val SETTING_ADB_WIFI_ENABLED = "adb_wifi_enabled"
         private const val WRITE_SECURE_SETTINGS = "android.permission.WRITE_SECURE_SETTINGS"
-        private const val ADB_CONNECT_SERVICE_TYPE = "_adb-tls-connect._tcp."
+        private const val ADB_CONNECT_SERVICE_TYPE = "_adb-tls-connect._tcp."\n        private const val ADB_PAIRING_SERVICE_TYPE = "_adb-tls-pairing._tcp."
         private const val NSD_TIMEOUT_SECONDS = 6L
         private const val MONITOR_INTERVAL_MS = 3000L
         private const val ENDPOINT_POLL_MS = 10000L
