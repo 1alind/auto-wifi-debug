@@ -30,11 +30,12 @@ class PairingCodeAccessibilityService : AccessibilityService() {
         }
     }
 
+    @Suppress("DEPRECATION")
     override fun onServiceConnected() {
         super.onServiceConnected()
         val filter = IntentFilter(ACTION_OPEN_PAIRING_SCREEN)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(pairingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else @Suppress("DEPRECATION") registerReceiver(pairingReceiver, filter)
+        else registerReceiver(pairingReceiver, filter)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
