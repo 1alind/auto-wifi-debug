@@ -1,0 +1,3 @@
+<resources>
+    <string name="pairing_accessibility_description">Reads the temporary Wireless debugging pairing code and automates navigation to its pairing dialog.</string>
+</resources>
