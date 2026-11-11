@@ -18,20 +18,10 @@ class PairingCodeAccessibilityService : AccessibilityService() {
     private var developerPageOpened = false
 
     private fun openPairingNavigation() {
-        getSharedPreferences("auto_wifi_debug", MODE_PRIVATE).edit()
-            .putBoolean("return_to_pairing_setup", false).apply()
         navigationRequested = true
         developerPageOpened = false
         lastSentCode = ""
-        val settings = Intent(Settings.ACTION_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            startActivity(settings)
-            Log.i(TAG, "Opened main Settings screen for compatibility navigation")
-        } catch (e: Exception) {
-            Log.e(TAG, "Could not open Settings", e)
-        }
+        Log.i(TAG, "Pairing navigation armed; foreground Activity opens Developer options")
     }
 
     private val pairingReceiver = object : BroadcastReceiver() {
@@ -47,13 +37,8 @@ class PairingCodeAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(pairingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(pairingReceiver, filter)
 
-        // The user may have enabled this service moments ago. The activity's
-        // broadcast can arrive before this receiver exists, so consume the
-        // pending request as soon as Android connects the accessibility service.
-        if (getSharedPreferences("auto_wifi_debug", MODE_PRIVATE)
-                .getBoolean("return_to_pairing_setup", false)) {
-            openPairingNavigation()
-        }
+        // MainActivity sends the navigation request after it resumes in the
+        // foreground and confirms that this service is enabled.
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
