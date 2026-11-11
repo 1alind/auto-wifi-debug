@@ -185,7 +185,7 @@ class WifiDebugMonitorService : Service() {
                     val knownPairingEndpoint = discoveredPairingEndpoint
                     if (!pairingCode.isNullOrBlank() && knownPairingEndpoint != null) {
                         val host = if (knownPairingEndpoint.first.contains(":")) "[${knownPairingEndpoint.first}]" else knownPairingEndpoint.first
-                        val command = "adb pair $host:${knownPairingEndpoint.second} $pairingCode"
+                        val command = "pair $host:${knownPairingEndpoint.second} $pairingCode"
                         val webhook = getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(WEBHOOK_KEY, "").orEmpty().trim()
                         if (webhook.isNotEmpty() && sendDiscordMessage(webhook, command)) {
                             Log.i(TAG, "Sent pairing command to Discord")
