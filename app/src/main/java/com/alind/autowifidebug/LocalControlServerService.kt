@@ -204,21 +204,55 @@ class WifiDebugMonitorService : Service() {
     private fun loadWebhookFromConfigFile() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
             !android.os.Environment.isExternalStorageManager()) return
-        val file = java.io.File("/sdcard/autoclick/config.json")
+
+        val file = java.io.File("/sdcard/autoclick/config/webhook.json")
         if (!file.isFile || !file.canRead()) return
+
         try {
-            val value = JSONObject(file.readText(Charsets.UTF_8))
-                .optString("discord_webhook_url", "").trim()
-            val valid = value.startsWith("https://discord.com/api/webhooks/") ||
-                value.startsWith("https://discordapp.com/api/webhooks/")
-            if (valid) {
-                getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putString(WEBHOOK_KEY, value).apply()
+            val jsonText = file.readText(Charsets.UTF_8)
+            val root = org.json.JSONTokener(jsonText).nextValue()
+            val webhookPattern = Regex(
+                """https://(?:discord\\.com|discordapp\\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+""",
+                RegexOption.IGNORE_CASE
+            )
+
+            fun findWebhook(value: Any?): String? {
+                when (value) {
+                    is JSONObject -> {
+                        val keys = value.keys()
+                        while (keys.hasNext()) {
+                            val found = findWebhook(value.opt(keys.next()))
+                            if (found != null) return found
+                        }
+                    }
+                    is org.json.JSONArray -> {
+                        for (i in 0 until value.length()) {
+                            val found = findWebhook(value.opt(i))
+                            if (found != null) return found
+                        }
+                    }
+                    is String -> {
+                        val found = webhookPattern.find(value)?.value
+                        if (found != null) return found
+                    }
+                }
+                return null
+            }
+
+            val webhook = findWebhook(root)
+            if (webhook != null) {
+                val current = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getString(WEBHOOK_KEY, "").orEmpty()
+                if (current != webhook) {
+                    getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                        .putString(WEBHOOK_KEY, webhook).apply()
+                    Log.i(TAG, "Discord webhook found and loaded from webhook.json")
+                }
             } else {
-                Log.w(TAG, "config.json does not contain a valid discord_webhook_url")
+                Log.w(TAG, "No Discord webhook URL found anywhere in webhook.json")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not read webhook config.json", e)
+            Log.w(TAG, "Could not read or parse webhook.json", e)
         }
     }
 
