@@ -123,9 +123,13 @@ class MainActivity : Activity() {
         root.addView(text("Connect to Wi-Fi first. Android/Samsung may refuse automatic Wireless debugging changes or restrict boot startup.", 13f, Color.rgb(207, 218, 233), false))
 
         setContentView(scroll)
-        startMonitorService()
         refreshStatus()
         refreshWebhookStatus()
+        if (hasAllFilesAccess()) {
+            startMonitorService()
+        } else {
+            openStoragePermissionSettings()
+        }
     }
 
     override fun onResume() {
@@ -139,8 +143,11 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun hasAllFilesAccess(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+
     private fun openStoragePermissionSettings() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        if (hasAllFilesAccess()) {
             refreshWebhookStatus()
             return
         }
