@@ -28,14 +28,11 @@ import java.util.concurrent.atomic.AtomicReference
 class WifiDebugMonitorService : Service() {
     @Volatile private var serviceRunning = false
     private var monitorThread: Thread? = null
-    @Volatile private var receiverLastWifiConnected = false
-    private val wifiReconnectEvent = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
-        receiverLastWifiConnected = isConnectedToWifi()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -135,8 +132,6 @@ class WifiDebugMonitorService : Service() {
     }
 
     private fun findWirelessDebuggingEndpoint(): Pair<String, Int>? = findEndpoint(ADB_CONNECT_SERVICE_TYPE)
-
-    private fun findWirelessPairingEndpoint(): Pair<String, Int>? = findEndpoint(ADB_PAIRING_SERVICE_TYPE)
 
     private fun findEndpoint(serviceType: String): Pair<String, Int>? {
         val nsd = getSystemService(Context.NSD_SERVICE) as? NsdManager ?: return null
