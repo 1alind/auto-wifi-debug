@@ -82,24 +82,10 @@ class MainActivity : Activity() {
         webhookCard.addView(text("Automatically reads /sdcard/autoclick/config/webhook.json", 13f, Color.rgb(170, 210, 190), false))
         webhookCard.addView(space(8))
         webhookCard.addView(Button(this).apply {
-            text = "Grant file access"
+            text = "Open storage permission settings"
             isAllCaps = false
-            setOnClickListener {
-                try {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    startActivity(intent)
-                } catch (_: Exception) {
-                    try {
-                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                    } catch (e: Exception) {
-                        Toast.makeText(this@MainActivity, "Could not open storage settings: " + e.message, Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
-        }.also { it.visibility = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) android.view.View.VISIBLE else android.view.View.GONE })
+            setOnClickListener { openStoragePermissionSettings() }
+        })
         root.addView(webhookCard)
         root.addView(space(14))
 
@@ -137,7 +123,6 @@ class MainActivity : Activity() {
         root.addView(text("Connect to Wi-Fi first. Android/Samsung may refuse automatic Wireless debugging changes or restrict boot startup.", 13f, Color.rgb(207, 218, 233), false))
 
         setContentView(scroll)
-        requestStorageAccessIfNeeded()
         startMonitorService()
         refreshStatus()
         refreshWebhookStatus()
@@ -154,19 +139,21 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun requestStorageAccessIfNeeded() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) return
+    private fun openStoragePermissionSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            refreshWebhookStatus()
+            return
+        }
         try {
-            val intent = Intent(
+            startActivity(Intent(
                 Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                 Uri.parse("package:$packageName")
-            )
-            startActivity(intent)
+            ))
         } catch (_: Exception) {
             try {
                 startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
             } catch (e: Exception) {
-                Toast.makeText(this, "Allow All files access so the app can read config.json automatically.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Could not open storage settings: " + (e.message ?: "unknown error"), Toast.LENGTH_LONG).show()
             }
         }
     }
