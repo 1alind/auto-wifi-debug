@@ -17,24 +17,26 @@ class PairingCodeAccessibilityService : AccessibilityService() {
     private var navigationRequested = false
     private var developerPageOpened = false
 
+    private fun openPairingNavigation() {
+        getSharedPreferences("auto_wifi_debug", MODE_PRIVATE).edit()
+            .putBoolean("return_to_pairing_setup", false).apply()
+        navigationRequested = true
+        developerPageOpened = false
+        lastSentCode = ""
+        val settings = Intent(Settings.ACTION_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(settings)
+            Log.i(TAG, "Opened main Settings screen for compatibility navigation")
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not open Settings", e)
+        }
+    }
+
     private val pairingReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action != ACTION_OPEN_PAIRING_SCREEN) return
-            navigationRequested = true
-            developerPageOpened = false
-            lastSentCode = ""
-            // Samsung One UI may reject ACTION_APPLICATION_DEVELOPMENT_SETTINGS
-            // with a false "Turn on Developer options first" warning.
-            // Open the normal Settings screen and navigate using accessibility instead.
-            val settings = Intent(Settings.ACTION_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                startActivity(settings)
-                Log.i(TAG, "Opened main Settings screen for compatibility navigation")
-            } catch (e: Exception) {
-                Log.e(TAG, "Could not open Settings", e)
-            }
+            if (intent.action == ACTION_OPEN_PAIRING_SCREEN) openPairingNavigation()
         }
     }
 
@@ -44,6 +46,14 @@ class PairingCodeAccessibilityService : AccessibilityService() {
         val filter = IntentFilter(ACTION_OPEN_PAIRING_SCREEN)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(pairingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(pairingReceiver, filter)
+
+        // The user may have enabled this service moments ago. The activity's
+        // broadcast can arrive before this receiver exists, so consume the
+        // pending request as soon as Android connects the accessibility service.
+        if (getSharedPreferences("auto_wifi_debug", MODE_PRIVATE)
+                .getBoolean("return_to_pairing_setup", false)) {
+            openPairingNavigation()
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -80,7 +90,6 @@ class PairingCodeAccessibilityService : AccessibilityService() {
             return
         }
 
-        // The Developer options entry is normally near the bottom of the main Settings list.
         if (!developerPageOpened) {
             val developerOptions = findNode(root, listOf("developer options"))
             if (developerOptions != null) {
