@@ -1,6 +1,8 @@
 package com.alind.autowifidebug
 
 import android.app.Activity
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.accessibility.AccessibilityManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -155,14 +157,28 @@ class MainActivity : Activity() {
                 startMonitorService()
             }
             val prefs = getSharedPreferences("auto_wifi_debug", MODE_PRIVATE)
-            // Do not clear this flag here. The accessibility service may still be
-            // starting after the user enables it; onServiceConnected consumes it.
-            if (prefs.getBoolean("return_to_pairing_setup", false)) {
+            if (prefs.getBoolean("return_to_pairing_setup", false) && isPairingAccessibilityEnabled()) {
+                // We are foreground again after the user enabled the accessibility
+                // service. Launch Developer options from the Activity, not from the
+                // background accessibility service.
+                prefs.edit().putBoolean("return_to_pairing_setup", false).apply()
                 sendBroadcast(Intent(PairingCodeAccessibilityService.ACTION_OPEN_PAIRING_SCREEN).setPackage(packageName))
+                try {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                } catch (_: Exception) {
+                    startActivity(Intent(Settings.ACTION_SETTINGS))
+                }
             }
             refreshStatus()
             refreshWebhookStatus()
         }
+    }
+
+    private fun isPairingAccessibilityEnabled(): Boolean {
+        val manager = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+        return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            .any { it.resolveInfo.serviceInfo.packageName == packageName &&
+                it.resolveInfo.serviceInfo.name == PairingCodeAccessibilityService::class.java.name }
     }
 
     private fun hasAllFilesAccess(): Boolean =
