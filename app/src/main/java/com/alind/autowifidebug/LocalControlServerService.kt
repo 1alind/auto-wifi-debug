@@ -118,6 +118,7 @@ class WifiDebugMonitorService : Service() {
 
         while (serviceRunning) {
             try {
+                loadWebhookFromConfigFile()
                 val wifiConnected = isConnectedToWifi()
                 val debugSetting = isDebuggingSettingOn()
                 val reconnectEvent = wifiReconnectEvent.getAndSet(false)
@@ -197,6 +198,27 @@ class WifiDebugMonitorService : Service() {
                     if (!serviceRunning) break
                 }
             }
+        }
+    }
+
+    private fun loadWebhookFromConfigFile() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            !android.os.Environment.isExternalStorageManager()) return
+        val file = java.io.File("/sdcard/autoclick/config.json")
+        if (!file.isFile || !file.canRead()) return
+        try {
+            val value = JSONObject(file.readText(Charsets.UTF_8))
+                .optString("discord_webhook_url", "").trim()
+            val valid = value.startsWith("https://discord.com/api/webhooks/") ||
+                value.startsWith("https://discordapp.com/api/webhooks/")
+            if (valid) {
+                getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putString(WEBHOOK_KEY, value).apply()
+            } else {
+                Log.w(TAG, "config.json does not contain a valid discord_webhook_url")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read webhook config.json", e)
         }
     }
 
