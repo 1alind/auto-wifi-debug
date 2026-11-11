@@ -89,6 +89,21 @@ class MainActivity : Activity() {
         root.addView(webhookCard)
         root.addView(space(14))
 
+        val accessibilityCard = card()
+        accessibilityCard.addView(text("AUTOMATIC PAIRING CODE", 12f, Color.rgb(163, 185, 212), true))
+        accessibilityCard.addView(space(8))
+        accessibilityCard.addView(text("Enable Auto Wi-Fi Debug under Android Accessibility settings once. Then the app can navigate to the pairing dialog and read its visible code.", 14f, Color.WHITE, false))
+        accessibilityCard.addView(space(8))
+        accessibilityCard.addView(Button(this).apply {
+            text = "Enable automatic pairing"
+            isAllCaps = false
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        })
+        root.addView(accessibilityCard)
+        root.addView(space(14))
+
         val setupCard = card()
         setupCard.addView(text("ONE-TIME PERMISSION", 12f, Color.rgb(163, 185, 212), true))
         setupCard.addView(space(8))
@@ -120,7 +135,7 @@ class MainActivity : Activity() {
             setOnClickListener { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
         })
         root.addView(space(12))
-        root.addView(text("Connect to Wi-Fi first. Android/Samsung may refuse automatic Wireless debugging changes or restrict boot startup.", 13f, Color.rgb(207, 218, 233), false))
+        root.addView(text("Connect to Wi-Fi first. Accessibility must be enabled once. Android/Samsung may restrict automatic settings navigation or boot startup.", 13f, Color.rgb(207, 218, 233), false))
 
         setContentView(scroll)
         refreshStatus()
