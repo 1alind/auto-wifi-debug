@@ -30,7 +30,7 @@ import android.widget.Toast
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var permissionStatus: TextView
-    private lateinit var webhookInput: EditText
+    private lateinit var webhookStatus: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,41 +76,10 @@ class MainActivity : Activity() {
         val webhookCard = card()
         webhookCard.addView(text("DISCORD WEBHOOK", 12f, Color.rgb(163, 185, 212), true))
         webhookCard.addView(space(8))
-        webhookCard.addView(text("Paste your Discord webhook URL. The app sends only messages like: connect 45827", 14f, Color.rgb(207, 218, 233), false))
-        webhookCard.addView(space(8))
-        webhookInput = EditText(this).apply {
-            hint = "https://discord.com/api/webhooks/…"
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setText(getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(WifiDebugMonitorService.WEBHOOK_KEY, ""))
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.rgb(170, 184, 202))
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            background = GradientDrawable().apply {
-                setColor(Color.argb(35, 255, 255, 255))
-                cornerRadius = dp(10).toFloat()
-                setStroke(dp(1), Color.argb(65, 255, 255, 255))
-            }
-        }
-        webhookCard.addView(webhookInput, LinearLayout.LayoutParams(-1, dp(52)))
-        webhookCard.addView(space(8))
-        webhookCard.addView(text("Auto-reads /sdcard/autoclick/config.json when the monitor starts. No file picker needed.", 13f, Color.rgb(170, 210, 190), false))
-        webhookCard.addView(space(8))
-        webhookCard.addView(Button(this).apply {
-            text = "Save webhook URL"
-            isAllCaps = false
-            setOnClickListener {
-                val value = webhookInput.text.toString().trim()
-                if (value.isNotEmpty() && (!value.startsWith("https://discord.com/api/webhooks/") &&
-                    !value.startsWith("https://discordapp.com/api/webhooks/"))) {
-                    Toast.makeText(this@MainActivity, "Enter a valid Discord webhook URL.", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
-                getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putString(WifiDebugMonitorService.WEBHOOK_KEY, value).apply()
-                Toast.makeText(this@MainActivity, if (value.isEmpty()) "Webhook cleared." else "Webhook saved.", Toast.LENGTH_SHORT).show()
-            }
-        })
+        webhookStatus = text("Checking webhook.json…", 15f, Color.WHITE, true)
+        webhookCard.addView(webhookStatus)
+        webhookCard.addView(space(6))
+        webhookCard.addView(text("Automatically reads /sdcard/autoclick/config/webhook.json", 13f, Color.rgb(170, 210, 190), false))
         root.addView(webhookCard)
         root.addView(space(14))
 
@@ -244,6 +213,50 @@ class MainActivity : Activity() {
             else startService(serviceIntent)
         } catch (e: Exception) {
             Toast.makeText(this, "Could not start monitor: " + e.message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun refreshWebhookStatus() {
+        val file = File("/sdcard/autoclick/config/webhook.json")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            webhookStatus.text = "⚠ All files access permission is missing"
+            webhookStatus.setTextColor(Color.rgb(255, 202, 120))
+            return
+        }
+        if (!file.isFile || !file.canRead()) {
+            webhookStatus.text = "✕ File not found or cannot be read"
+            webhookStatus.setTextColor(Color.rgb(255, 130, 130))
+            return
+        }
+        try {
+            val root = org.json.JSONTokener(file.readText(Charsets.UTF_8)).nextValue()
+            val pattern = Regex(
+                """https://(?:discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+""",
+                RegexOption.IGNORE_CASE
+            )
+            fun find(value: Any?): String? {
+                when (value) {
+                    is JSONObject -> {
+                        val keys = value.keys()
+                        while (keys.hasNext()) find(value.opt(keys.next()))?.let { return it }
+                    }
+                    is org.json.JSONArray -> {
+                        for (i in 0 until value.length()) find(value.opt(i))?.let { return it }
+                    }
+                    is String -> return pattern.find(value)?.value
+                }
+                return null
+            }
+            if (find(root) != null) {
+                webhookStatus.text = "✓ Webhook URL found in file"
+                webhookStatus.setTextColor(Color.rgb(112, 231, 170))
+            } else {
+                webhookStatus.text = "✕ No Discord webhook URL found in file"
+                webhookStatus.setTextColor(Color.rgb(255, 130, 130))
+            }
+        } catch (e: Exception) {
+            webhookStatus.text = "✕ Invalid or unreadable JSON file"
+            webhookStatus.setTextColor(Color.rgb(255, 130, 130))
         }
     }
 
