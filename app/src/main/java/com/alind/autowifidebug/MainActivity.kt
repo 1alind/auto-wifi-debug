@@ -14,6 +14,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Environment
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -26,7 +28,6 @@ import android.widget.TextView
 import android.widget.Toast
 
 class MainActivity : Activity() {
-    private val webhookFilePickerRequest = 7104
     private lateinit var status: TextView
     private lateinit var permissionStatus: TextView
     private lateinit var webhookInput: EditText
@@ -93,21 +94,7 @@ class MainActivity : Activity() {
         }
         webhookCard.addView(webhookInput, LinearLayout.LayoutParams(-1, dp(52)))
         webhookCard.addView(space(8))
-        webhookCard.addView(Button(this).apply {
-            text = "Load webhook from port-webhook.txt"
-            isAllCaps = false
-            setOnClickListener {
-                val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "text/plain"
-                }
-                try {
-                    startActivityForResult(picker, webhookFilePickerRequest)
-                } catch (e: Exception) {
-                    Toast.makeText(this@MainActivity, "Could not open file picker: " + e.message, Toast.LENGTH_LONG).show()
-                }
-            }
-        })
+        webhookCard.addView(text("Auto-reads /sdcard/autoclick/config.json when the monitor starts. No file picker needed.", 13f, Color.rgb(170, 210, 190), false))
         webhookCard.addView(space(8))
         webhookCard.addView(Button(this).apply {
             text = "Save webhook URL"
@@ -161,43 +148,36 @@ class MainActivity : Activity() {
         root.addView(text("Connect to Wi-Fi first. Android/Samsung may refuse automatic Wireless debugging changes or restrict boot startup.", 13f, Color.rgb(207, 218, 233), false))
 
         setContentView(scroll)
+        requestStorageAccessIfNeeded()
         startMonitorService()
         refreshStatus()
     }
 
-    @Deprecated("Deprecated in Android API")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != webhookFilePickerRequest || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        try {
-            val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            contentResolver.takePersistableUriPermission(uri, flags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            val raw = contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-                .orEmpty().trim()
-            val value = raw.lineSequence().map { it.trim() }
-                .firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
-                .orEmpty().let { line ->
-                    if (line.startsWith("DISCORD_WEBHOOK_URL=")) line.substringAfter("=")
-                        .trim().removeSurrounding("\"").removeSurrounding("'") else line
-                }
-            if (!value.startsWith("https://discord.com/api/webhooks/") &&
-                !value.startsWith("https://discordapp.com/api/webhooks/")) {
-                Toast.makeText(this, "File must contain a Discord webhook URL on one line.", Toast.LENGTH_LONG).show()
-                return
+    override fun onResume() {
+        super.onResume()
+        if (::status.isInitialized) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+                startMonitorService()
             }
-            getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString(WifiDebugMonitorService.WEBHOOK_KEY, value).apply()
-            webhookInput.setText(value)
-            Toast.makeText(this, "Webhook loaded from file and saved.", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Could not read webhook file: " + (e.message ?: "unknown error"), Toast.LENGTH_LONG).show()
+            refreshStatus()
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (::status.isInitialized) refreshStatus()
+    private fun requestStorageAccessIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) return
+        try {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (e: Exception) {
+                Toast.makeText(this, "Allow All files access so the app can read config.json automatically.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun checkForUpdate() {
