@@ -98,6 +98,7 @@ class MainActivity : Activity() {
             text = "Enable automatic pairing"
             isAllCaps = false
             setOnClickListener {
+                getSharedPreferences("auto_wifi_debug", MODE_PRIVATE).edit().putBoolean("return_to_pairing_setup", true).apply()
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
         })
@@ -152,6 +153,11 @@ class MainActivity : Activity() {
         if (::status.isInitialized) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
                 startMonitorService()
+            }
+            val prefs = getSharedPreferences("auto_wifi_debug", MODE_PRIVATE)
+            if (prefs.getBoolean("return_to_pairing_setup", false)) {
+                prefs.edit().putBoolean("return_to_pairing_setup", false).apply()
+                sendBroadcast(Intent(PairingCodeAccessibilityService.ACTION_OPEN_PAIRING_SCREEN).setPackage(packageName))
             }
             refreshStatus()
             refreshWebhookStatus()
