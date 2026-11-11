@@ -6,27 +6,23 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
-import android.provider.Settings
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.util.Log
 
 class PairingCodeAccessibilityService : AccessibilityService() {
     private var lastSentCode = ""
     private var lastNavigationAction = 0L
     private var navigationRequested = false
-    private var developerPageOpened = false
-
-    private fun openPairingNavigation() {
-        navigationRequested = true
-        developerPageOpened = false
-        lastSentCode = ""
-        Log.i(TAG, "Pairing navigation armed; foreground Activity opens Developer options")
-    }
 
     private val pairingReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == ACTION_OPEN_PAIRING_SCREEN) openPairingNavigation()
+            if (intent.action == ACTION_OPEN_PAIRING_SCREEN) {
+                navigationRequested = true
+                lastSentCode = ""
+                lastNavigationAction = 0L
+                Log.i(TAG, "Navigation request received")
+            }
         }
     }
 
@@ -34,97 +30,136 @@ class PairingCodeAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         val filter = IntentFilter(ACTION_OPEN_PAIRING_SCREEN)
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(pairingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else registerReceiver(pairingReceiver, filter)
-
-        // MainActivity sends the navigation request after it resumes in the
-        // foreground and confirms that this service is enabled.
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(pairingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(pairingReceiver, filter)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!navigationRequested || event == null) return
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg != "com.android.settings" && pkg != "com.samsung.android.settings") return
+
         val root = rootInActiveWindow ?: return
-        val allText = collectText(root).joinToString(" ").lowercase()
+        val labels = collectLabels(root)
+        val allText = labels.joinToString(" ").lowercase()
         val now = System.currentTimeMillis()
 
-        val codeMatch = Regex("\\b[0-9]{6}\\b").find(allText)
-        if (codeMatch != null && (allText.contains("pair") || allText.contains("code"))) {
-            val code = codeMatch.value
+        // The pairing dialog is the destination. Read only its visible six-digit code.
+        val code = Regex("\\b[0-9]{6}\\b").find(allText)?.value
+        if (code != null && (allText.contains("pair") || allText.contains("code"))) {
             if (code != lastSentCode) {
                 lastSentCode = code
-                sendBroadcast(Intent(ACTION_PAIRING_CODE).setPackage(packageName).putExtra(EXTRA_PAIRING_CODE, code))
-                Log.i(TAG, "Detected pairing code and forwarded it to monitor")
+                sendBroadcast(
+                    Intent(ACTION_PAIRING_CODE)
+                        .setPackage(packageName)
+                        .putExtra(EXTRA_PAIRING_CODE, code)
+                )
+                Log.i(TAG, "Pairing code detected and forwarded")
             }
             return
         }
 
-        if (now - lastNavigationAction < 800) return
+        if (now - lastNavigationAction < 700) return
 
-        val pairButton = findNode(root, listOf("pair device with pairing code", "pair with pairing code"))
-        if (pairButton != null) {
-            if (clickNode(pairButton)) lastNavigationAction = now
+        // Match the actual visible labels, then click their clickable row/container.
+        val pairNode = findMatchingNode(root, PAIR_LABELS)
+        if (pairNode != null && clickNodeOrParent(pairNode)) {
+            lastNavigationAction = now
+            Log.i(TAG, "Opened pairing-code dialog")
             return
         }
 
-        val wireless = findNode(root, listOf("wireless debugging"))
-        if (wireless != null) {
-            if (clickNode(wireless)) {
-                developerPageOpened = true
+        val wirelessNode = findMatchingNode(root, WIRELESS_LABELS)
+        if (wirelessNode != null) {
+            if (clickNodeOrParent(wirelessNode)) {
                 lastNavigationAction = now
+                Log.i(TAG, "Opened Wireless debugging")
             }
             return
         }
 
-        if (!developerPageOpened) {
-            val developerOptions = findNode(root, listOf("developer options"))
-            if (developerOptions != null) {
-                if (clickNode(developerOptions)) {
-                    developerPageOpened = true
-                    lastNavigationAction = now
-                    Log.i(TAG, "Opened Developer options through Settings list")
-                }
-                return
-            }
-            if (now - lastNavigationAction >= 1200 && scrollForward(root)) {
+        val developerNode = findMatchingNode(root, DEVELOPER_LABELS)
+        if (developerNode != null) {
+            if (clickNodeOrParent(developerNode)) {
                 lastNavigationAction = now
-                Log.i(TAG, "Scrolled Settings to locate Developer options")
+                Log.i(TAG, "Opened Developer options")
             }
+            return
+        }
+
+        // Important: keep scrolling on BOTH the main Settings page and Developer
+        // options. Previously scrolling stopped as soon as Developer options opened,
+        // so Wireless debugging could remain below the visible area forever.
+        if (scrollAnyContainer(root)) {
+            lastNavigationAction = now
+            Log.i(TAG, "Scrolled Settings while searching for the next target")
         }
     }
 
-    private fun collectText(node: AccessibilityNodeInfo): List<String> {
+    private fun collectLabels(node: AccessibilityNodeInfo): List<String> {
         val result = mutableListOf<String>()
-        node.text?.toString()?.let { result.add(it) }
-        node.contentDescription?.toString()?.let { result.add(it) }
-        for (i in 0 until node.childCount) node.getChild(i)?.let { result.addAll(collectText(it)) }
+        node.text?.toString()?.takeIf { it.isNotBlank() }?.let(result::add)
+        node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let(result::add)
+        node.viewIdResourceName?.takeIf { it.isNotBlank() }?.let(result::add)
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            result.addAll(collectLabels(child))
+        }
         return result
     }
 
-    private fun findNode(node: AccessibilityNodeInfo, labels: List<String>): AccessibilityNodeInfo? {
-        val value = ((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")).lowercase()
-        if (labels.any { value.contains(it) }) return node
+    private fun normalize(value: String): String =
+        value.lowercase().replace(Regex("[^a-z0-9]"), "")
+
+    private fun findMatchingNode(
+        node: AccessibilityNodeInfo,
+        candidates: List<String>,
+        depth: Int = 0
+    ): AccessibilityNodeInfo? {
+        if (depth > 35) return null
+        val raw = listOfNotNull(
+            node.text?.toString(),
+            node.contentDescription?.toString(),
+            node.viewIdResourceName
+        ).joinToString(" ")
+        val value = normalize(raw)
+        if (candidates.any { value.contains(normalize(it)) }) return node
+
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            val found = findNode(child, labels)
-            if (found != null) return found
+            val match = findMatchingNode(child, candidates, depth + 1)
+            if (match != null) return match
         }
         return null
     }
 
-    private fun clickNode(node: AccessibilityNodeInfo): Boolean {
+    private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
         var current: AccessibilityNodeInfo? = node
-        while (current != null) {
-            if (current.isClickable && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-            current = current.parent
+        repeat(8) {
+            val candidate = current ?: return false
+            if (candidate.isEnabled &&
+                (candidate.isClickable || candidate.actionList.any {
+                    it.id == AccessibilityNodeInfo.ACTION_CLICK
+                }) &&
+                candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            ) return true
+            current = candidate.parent
         }
         return false
     }
 
-    private fun scrollForward(node: AccessibilityNodeInfo): Boolean {
-        if (node.isScrollable && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true
+    private fun scrollAnyContainer(node: AccessibilityNodeInfo, depth: Int = 0): Boolean {
+        if (depth > 35) return false
+        if (node.isScrollable && node.isEnabled &&
+            node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+        ) return true
+
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (scrollForward(child)) return true
+            if (scrollAnyContainer(child, depth + 1)) return true
         }
         return false
     }
@@ -132,7 +167,10 @@ class PairingCodeAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
-        try { unregisterReceiver(pairingReceiver) } catch (_: Exception) {}
+        try {
+            unregisterReceiver(pairingReceiver)
+        } catch (_: Exception) {
+        }
         super.onDestroy()
     }
 
@@ -141,5 +179,25 @@ class PairingCodeAccessibilityService : AccessibilityService() {
         const val ACTION_OPEN_PAIRING_SCREEN = "com.alind.autowifidebug.OPEN_PAIRING_SCREEN"
         const val ACTION_PAIRING_CODE = "com.alind.autowifidebug.PAIRING_CODE"
         const val EXTRA_PAIRING_CODE = "pairing_code"
+
+        private val DEVELOPER_LABELS = listOf(
+            "Developer options",
+            "Developer mode",
+            "Developer settings"
+        )
+        private val WIRELESS_LABELS = listOf(
+            "Wireless debugging",
+            "Wireless debug",
+            "Wi-Fi debugging",
+            "WiFi debugging",
+            "ADB over Wi-Fi",
+            "ADB over wireless"
+        )
+        private val PAIR_LABELS = listOf(
+            "Pair device with pairing code",
+            "Pair with pairing code",
+            "Pair using pairing code",
+            "Pair device"
+        )
     }
 }
