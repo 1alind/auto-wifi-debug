@@ -80,6 +80,26 @@ class MainActivity : Activity() {
         webhookCard.addView(webhookStatus)
         webhookCard.addView(space(6))
         webhookCard.addView(text("Automatically reads /sdcard/autoclick/config/webhook.json", 13f, Color.rgb(170, 210, 190), false))
+        webhookCard.addView(space(8))
+        webhookCard.addView(Button(this).apply {
+            text = "Grant file access"
+            isAllCaps = false
+            setOnClickListener {
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Could not open storage settings: " + e.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }.also { it.visibility = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) android.view.View.VISIBLE else android.view.View.GONE })
         root.addView(webhookCard)
         root.addView(space(14))
 
@@ -120,6 +140,7 @@ class MainActivity : Activity() {
         requestStorageAccessIfNeeded()
         startMonitorService()
         refreshStatus()
+        refreshWebhookStatus()
     }
 
     override fun onResume() {
@@ -129,6 +150,7 @@ class MainActivity : Activity() {
                 startMonitorService()
             }
             refreshStatus()
+            refreshWebhookStatus()
         }
     }
 
