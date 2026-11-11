@@ -95,7 +95,7 @@ class WifiDebugMonitorService : Service() {
             addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
             addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
             addAction(ConnectivityManager.CONNECTIVITY_ACTION)
-            addAction(ACTION_CONNECT_PORT)
+            addAction(ACTION_CONNECT_PORT)\n            addAction(PairingCodeAccessibilityService.ACTION_PAIRING_CODE)
         }
         try {
             if (Build.VERSION.SDK_INT >= 33) {
