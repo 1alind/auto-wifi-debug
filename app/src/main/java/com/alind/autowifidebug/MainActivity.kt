@@ -1,14 +1,11 @@
 package com.alind.autowifidebug
 
 import android.app.Activity
-import android.accessibilityservice.AccessibilityServiceInfo
-import android.view.accessibility.AccessibilityManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
-import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -32,7 +29,6 @@ import android.widget.Toast
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var permissionStatus: TextView
-    private lateinit var webhookStatus: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,7 +49,7 @@ class MainActivity : Activity() {
         root.addView(space(8))
         root.addView(text("Auto Wi-Fi Debug", 29f, Color.WHITE, true))
         root.addView(space(8))
-        root.addView(text("Automatically monitors Wireless debugging and posts the current ADB port to Discord.", 15f, Color.rgb(207, 218, 233), false))
+        root.addView(text("Automatically monitors Wireless debugging and saves the latest ADB connection port locally.", 15f, Color.rgb(207, 218, 233), false))
         root.addView(space(24))
 
         val statusCard = card()
@@ -73,38 +69,6 @@ class MainActivity : Activity() {
                 Toast.makeText(this@MainActivity, "Monitor is running; waiting for Wi-Fi and Wireless debugging.", Toast.LENGTH_LONG).show()
             }
         }, LinearLayout.LayoutParams(-1, dp(54)))
-        root.addView(space(14))
-
-        val webhookCard = card()
-        webhookCard.addView(text("DISCORD WEBHOOK", 12f, Color.rgb(163, 185, 212), true))
-        webhookCard.addView(space(8))
-        webhookStatus = text("Checking webhook.json…", 15f, Color.WHITE, true)
-        webhookCard.addView(webhookStatus)
-        webhookCard.addView(space(6))
-        webhookCard.addView(text("Automatically reads /sdcard/autoclick/config/webhook.json", 13f, Color.rgb(170, 210, 190), false))
-        webhookCard.addView(space(8))
-        webhookCard.addView(Button(this).apply {
-            text = "Open storage permission settings"
-            isAllCaps = false
-            setOnClickListener { openStoragePermissionSettings() }
-        })
-        root.addView(webhookCard)
-        root.addView(space(14))
-
-        val accessibilityCard = card()
-        accessibilityCard.addView(text("AUTOMATIC PAIRING CODE", 12f, Color.rgb(163, 185, 212), true))
-        accessibilityCard.addView(space(8))
-        accessibilityCard.addView(text("Enable Auto Wi-Fi Debug under Android Accessibility settings once. Then the app can navigate to the pairing dialog and read its visible code.", 14f, Color.WHITE, false))
-        accessibilityCard.addView(space(8))
-        accessibilityCard.addView(Button(this).apply {
-            text = "Enable automatic pairing"
-            isAllCaps = false
-            setOnClickListener {
-                getSharedPreferences("auto_wifi_debug", MODE_PRIVATE).edit().putBoolean("return_to_pairing_setup", true).apply()
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
-        })
-        root.addView(accessibilityCard)
         root.addView(space(14))
 
         val setupCard = card()
@@ -142,7 +106,6 @@ class MainActivity : Activity() {
 
         setContentView(scroll)
         refreshStatus()
-        refreshWebhookStatus()
         if (hasAllFilesAccess()) {
             startMonitorService()
         } else {
@@ -156,29 +119,8 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
                 startMonitorService()
             }
-            val prefs = getSharedPreferences("auto_wifi_debug", MODE_PRIVATE)
-            if (prefs.getBoolean("return_to_pairing_setup", false) && isPairingAccessibilityEnabled()) {
-                // We are foreground again after the user enabled the accessibility
-                // service. Launch Developer options from the Activity, not from the
-                // background accessibility service.
-                prefs.edit().putBoolean("return_to_pairing_setup", false).apply()
-                sendBroadcast(Intent(PairingCodeAccessibilityService.ACTION_OPEN_PAIRING_SCREEN).setPackage(packageName))
-                try {
-                    startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-                } catch (_: Exception) {
-                    startActivity(Intent(Settings.ACTION_SETTINGS))
-                }
-            }
             refreshStatus()
-            refreshWebhookStatus()
         }
-    }
-
-    private fun isPairingAccessibilityEnabled(): Boolean {
-        val manager = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        return manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-            .any { it.resolveInfo.serviceInfo.packageName == packageName &&
-                it.resolveInfo.serviceInfo.name == PairingCodeAccessibilityService::class.java.name }
     }
 
     private fun hasAllFilesAccess(): Boolean =
@@ -186,7 +128,6 @@ class MainActivity : Activity() {
 
     private fun openStoragePermissionSettings() {
         if (hasAllFilesAccess()) {
-            refreshWebhookStatus()
             return
         }
         try {
@@ -267,50 +208,6 @@ class MainActivity : Activity() {
             else startService(serviceIntent)
         } catch (e: Exception) {
             Toast.makeText(this, "Could not start monitor: " + e.message, Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun refreshWebhookStatus() {
-        val file = File("/sdcard/autoclick/config/webhook.json")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
-            webhookStatus.text = "⚠ All files access permission is missing"
-            webhookStatus.setTextColor(Color.rgb(255, 202, 120))
-            return
-        }
-        if (!file.isFile || !file.canRead()) {
-            webhookStatus.text = "✕ File not found or cannot be read"
-            webhookStatus.setTextColor(Color.rgb(255, 130, 130))
-            return
-        }
-        try {
-            val root = org.json.JSONTokener(file.readText(Charsets.UTF_8)).nextValue()
-            val pattern = Regex(
-                """https://(?:discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+""",
-                RegexOption.IGNORE_CASE
-            )
-            fun find(value: Any?): String? {
-                when (value) {
-                    is JSONObject -> {
-                        val keys = value.keys()
-                        while (keys.hasNext()) find(value.opt(keys.next()))?.let { return it }
-                    }
-                    is org.json.JSONArray -> {
-                        for (i in 0 until value.length()) find(value.opt(i))?.let { return it }
-                    }
-                    is String -> return pattern.find(value)?.value
-                }
-                return null
-            }
-            if (find(root) != null) {
-                webhookStatus.text = "✓ Webhook URL found in file"
-                webhookStatus.setTextColor(Color.rgb(112, 231, 170))
-            } else {
-                webhookStatus.text = "✕ No Discord webhook URL found in file"
-                webhookStatus.setTextColor(Color.rgb(255, 130, 130))
-            }
-        } catch (e: Exception) {
-            webhookStatus.text = "✕ Invalid or unreadable JSON file"
-            webhookStatus.setTextColor(Color.rgb(255, 130, 130))
         }
     }
 
