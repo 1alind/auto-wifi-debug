@@ -155,8 +155,9 @@ class MainActivity : Activity() {
                 startMonitorService()
             }
             val prefs = getSharedPreferences("auto_wifi_debug", MODE_PRIVATE)
+            // Do not clear this flag here. The accessibility service may still be
+            // starting after the user enables it; onServiceConnected consumes it.
             if (prefs.getBoolean("return_to_pairing_setup", false)) {
-                prefs.edit().putBoolean("return_to_pairing_setup", false).apply()
                 sendBroadcast(Intent(PairingCodeAccessibilityService.ACTION_OPEN_PAIRING_SCREEN).setPackage(packageName))
             }
             refreshStatus()
