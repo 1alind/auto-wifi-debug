@@ -168,6 +168,12 @@ class WifiDebugMonitorService : Service() {
                 if (currentDebugSetting && !previousDebugSetting) {
                     announcePending = true
                 }
+                if (wifiConnected && currentDebugSetting && !pairingScreenRequested) {
+                    pairingScreenRequested = true
+                    sendBroadcast(Intent(PairingCodeAccessibilityService.ACTION_OPEN_PAIRING_SCREEN).setPackage(packageName))
+                    Log.i(TAG, "Requested automatic Wireless debugging pairing-screen navigation")
+                }
+                if (!wifiConnected || !currentDebugSetting) pairingScreenRequested = false
 
                 val now = System.currentTimeMillis()
                 val shouldDiscover = announcePending || now - lastDiscoveryTime >= ENDPOINT_POLL_MS
