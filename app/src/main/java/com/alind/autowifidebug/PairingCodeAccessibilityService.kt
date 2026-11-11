@@ -15,17 +15,25 @@ class PairingCodeAccessibilityService : AccessibilityService() {
     private var lastSentCode = ""
     private var lastNavigationAction = 0L
     private var navigationRequested = false
+    private var developerPageOpened = false
 
     private val pairingReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != ACTION_OPEN_PAIRING_SCREEN) return
             navigationRequested = true
+            developerPageOpened = false
             lastSentCode = ""
-            val settings = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).apply {
+            // Samsung One UI may reject ACTION_APPLICATION_DEVELOPMENT_SETTINGS
+            // with a false "Turn on Developer options first" warning.
+            // Open the normal Settings screen and navigate using accessibility instead.
+            val settings = Intent(Settings.ACTION_SETTINGS).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            try { startActivity(settings) } catch (e: Exception) {
-                Log.e(TAG, "Could not open Developer options", e)
+            try {
+                startActivity(settings)
+                Log.i(TAG, "Opened main Settings screen for compatibility navigation")
+            } catch (e: Exception) {
+                Log.e(TAG, "Could not open Settings", e)
             }
         }
     }
@@ -55,15 +63,38 @@ class PairingCodeAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (now - lastNavigationAction < 900) return
+        if (now - lastNavigationAction < 800) return
+
         val pairButton = findNode(root, listOf("pair device with pairing code", "pair with pairing code"))
         if (pairButton != null) {
             if (clickNode(pairButton)) lastNavigationAction = now
             return
         }
+
         val wireless = findNode(root, listOf("wireless debugging"))
         if (wireless != null) {
-            if (clickNode(wireless)) lastNavigationAction = now
+            if (clickNode(wireless)) {
+                developerPageOpened = true
+                lastNavigationAction = now
+            }
+            return
+        }
+
+        // The Developer options entry is normally near the bottom of the main Settings list.
+        if (!developerPageOpened) {
+            val developerOptions = findNode(root, listOf("developer options"))
+            if (developerOptions != null) {
+                if (clickNode(developerOptions)) {
+                    developerPageOpened = true
+                    lastNavigationAction = now
+                    Log.i(TAG, "Opened Developer options through Settings list")
+                }
+                return
+            }
+            if (now - lastNavigationAction >= 1200 && scrollForward(root)) {
+                lastNavigationAction = now
+                Log.i(TAG, "Scrolled Settings to locate Developer options")
+            }
         }
     }
 
@@ -91,6 +122,15 @@ class PairingCodeAccessibilityService : AccessibilityService() {
         while (current != null) {
             if (current.isClickable && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
             current = current.parent
+        }
+        return false
+    }
+
+    private fun scrollForward(node: AccessibilityNodeInfo): Boolean {
+        if (node.isScrollable && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (scrollForward(child)) return true
         }
         return false
     }
