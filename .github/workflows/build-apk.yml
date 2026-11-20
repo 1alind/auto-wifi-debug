@@ -32,12 +32,16 @@ jobs:
           printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
           chmod 600 "$HOME/.android/debug.keystore"
           keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug --stacktrace
+      - name: Build modern APK (Android 11+)
+        run: gradle --no-daemon assembleModernDebug --stacktrace
+      - name: Build legacy APK (Android 8+)
+        run: gradle --no-daemon assembleLegacyDebug --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: auto-wifi-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: auto-wifi-debug-apks
+          path: |
+            app/build/outputs/apk/modern/debug/*.apk
+            app/build/outputs/apk/legacy/debug/*.apk
           if-no-files-found: error
           retention-days: 30
       - name: Publish downloadable APK release
@@ -45,6 +49,8 @@ jobs:
         with:
           tag_name: apk-build-${{ github.run_number }}
           name: Auto Wi-Fi Debug APK build ${{ github.run_number }}
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            app/build/outputs/apk/modern/debug/*.apk
+            app/build/outputs/apk/legacy/debug/*.apk
           draft: false
           prerelease: false
